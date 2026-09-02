@@ -83,18 +83,18 @@ async function main() {
 	}
 	c.send({ type: "set_model", modelId: models.models[0].id });
 
-	c.send({ type: "prompt", text: "第一个问题：如何学习 TypeScript？" });
-	await c.wait((m) => m.type === "snapshot" && msgText(m, "第一个问题"));
+	c.send({ type: "prompt", text: "First question: how do I learn TypeScript?" });
+	await c.wait((m) => m.type === "snapshot" && msgText(m, "First question"));
 	console.log("[3] first question persisted");
 
-	c.send({ type: "prompt", text: "第二个问题：如何学习 Rust？" });
+	c.send({ type: "prompt", text: "Second question: how do I learn Rust?" });
 	const preSnap = await c.wait(
 		(m) =>
-			m.type === "snapshot" && msgText(m, "第二个问题") && !m.state.isStreaming,
+			m.type === "snapshot" && msgText(m, "Second question") && !m.state.isStreaming,
 	);
 	const pre = userMessages(preSnap);
 	const target = pre.find((m) =>
-		m.content.some((b) => b.text?.includes("第一个问题")),
+		m.content.some((b) => b.text?.includes("First question")),
 	);
 	if (!target) throw new Error("FAIL: could not find first user message");
 	console.log("[4] editing message id:", target.id);
@@ -102,10 +102,10 @@ async function main() {
 	c.send({
 		type: "edit_message",
 		messageId: target.id,
-		text: "修改后的问题：怎么学 Go？",
+		text: "Edited question: how do I learn Go?",
 	});
 	const snap2 = await c.wait(
-		(m) => m.type === "snapshot" && msgText(m, "修改后的问题"),
+		(m) => m.type === "snapshot" && msgText(m, "Edited question"),
 	);
 	console.log("[5] new session:", snap2.state.sessionId.slice(0, 8));
 	if (snap2.state.sessionId === snap0.state.sessionId) {
@@ -117,10 +117,10 @@ async function main() {
 			m.content.map((b) => (b.type === "text" ? b.text : "")).join(""),
 		);
 	console.log("[6] user messages in new session:", JSON.stringify(texts));
-	if (texts.some((t) => t.includes("第一个问题") || t.includes("第二个问题"))) {
+	if (texts.some((t) => t.includes("First question") || t.includes("Second question"))) {
 		throw new Error("FAIL: old questions leaked into the forked session");
 	}
-	if (!texts.some((t) => t.includes("修改后的问题"))) {
+	if (!texts.some((t) => t.includes("Edited question"))) {
 		throw new Error("FAIL: edited question missing from new session");
 	}
 

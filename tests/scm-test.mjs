@@ -138,7 +138,7 @@ async function main() {
 	await sleep(800);
 
 	// Dismiss the pi-setup modal if it shows (fresh env may not have agent config).
-	const skipBtn = page.locator("button:has-text('跳过'), button:has-text('Skip')").first();
+	const skipBtn = page.locator("button:has-text('Skip')").first();
 	if (await skipBtn.isVisible().catch(() => false)) {
 		await skipBtn.click();
 		await sleep(300);
@@ -193,7 +193,7 @@ async function main() {
 	// untracked file click → note, not a diff
 	await page.locator(".scm-file-path", { hasText: "newfile.txt" }).click();
 	await waitFor(
-		async () => (await page.locator(".scm-empty").allTextContents()).some((s) => s.includes("未跟踪") || s.includes("Untracked")),
+		async () => (await page.locator(".scm-empty").allTextContents()).some((s) => s.includes("Untracked")),
 		10000,
 		"untracked note",
 	);
@@ -202,7 +202,7 @@ async function main() {
 	// -- commit through the terminal bridge -----------------------------------
 	await page.locator(".scm-commit-input").fill("my first commit");
 	await page.click('.scm-header button.btn.primary');
-	await page.waitForSelector('.view-switch button[aria-selected="true"]:has-text("终端")', {
+	await page.waitForSelector('.view-switch button[aria-selected="true"]:has-text("Terminal")', {
 		timeout: 5000,
 	});
 	check("view auto-switched to terminal", true);
@@ -226,7 +226,7 @@ async function main() {
 	// -- back to git view: auto-refresh → clean tree --------------------------
 	await page.click('.view-switch button:has-text("Git")');
 	await waitFor(
-		async () => (await page.locator(".scm-empty").allTextContents()).some((s) => s.includes("干净") || s.includes("clean")),
+		async () => (await page.locator(".scm-empty").allTextContents()).some((s) => s.includes("clean")),
 		25000,
 		"clean tree after commit",
 	);
@@ -242,7 +242,7 @@ async function main() {
 		"branch appears in select",
 	);
 	await page.selectOption(".scm-select", "feature-x");
-	await page.click('.scm-row button:has-text("切换")');
+	await page.click('.scm-row button:has-text("Switch")');
 	await waitFor(
 		async () => execSync("git rev-parse --abbrev-ref HEAD", { cwd: repo }).toString().trim() === "feature-x",
 		20000,

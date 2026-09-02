@@ -2,27 +2,27 @@
 /**
  * pi-web-ui CLI.
  *
- *   pi-web-ui                              启动生产服务器（前台，Ctrl+C 停止，自动打开浏览器）
- *   pi-web-ui --port 9000 --cwd /path      同上，覆盖端口 / 工作目录 / 数据目录
- *   pi-web-ui --no-browser                 启动但不自动打开浏览器
+ *   pi-web-ui                              Start the production server (foreground, Ctrl+C to stop, opens the browser)
+ *   pi-web-ui --port 9000 --cwd /path      Same, overriding port / workspace / data directory
+ *   pi-web-ui --no-browser                 Start without opening the browser
  *   pi-web-ui --version | --help
- *   pi-web-ui server install [选项]         安装系统服务（开机自启）并启动
- *   pi-web-ui server shortcut [选项]        在桌面创建「一键启动」图标（启动服务并打开浏览器）
- *   pi-web-ui server uninstall [选项]       卸载系统服务（同时移除桌面图标）
- *   pi-web-ui server start|stop|restart|status [选项]
- *   pi-web-ui install <源> [选项]           安装 GitHub 上的界面插件（见下方「界面插件」）
- *   pi-web-ui plugins / uninstall <id>      列出 / 卸载界面插件
+ *   pi-web-ui server install [options]     Install a system service (starts on login) and start it
+ *   pi-web-ui server shortcut [options]    Create a desktop "one-click start" icon (starts the server and opens the browser)
+ *   pi-web-ui server uninstall [options]   Uninstall the system service (also removes the desktop icon)
+ *   pi-web-ui server start|stop|restart|status [options]
+ *   pi-web-ui install <source> [options]   Install a GitHub UI plugin (see --help)
+ *   pi-web-ui plugins / uninstall <id>     List / uninstall UI plugins
  *
- * 系统服务：
- *   - macOS   → launchd 用户代理，label 默认 com.xingshuyin.pi-web-ui
- *              （--name 自定义时 com.<name>.server），无需 sudo
- *   - Linux   → systemd 单元 <name>.service（/etc/systemd/system/，自动 sudo）
- *   - Windows → 计划任务（Task Scheduler / schtasks，登录后自启，无需管理员），
- *              隐藏窗口启动（无黑窗）；PowerShell 启动脚本与任务 XML 生成在
+ * System service:
+ *   - macOS   → launchd user agent, default label com.xingshuyin.pi-web-ui
+ *              (com.<name>.server when --name is customized); no sudo needed
+ *   - Linux   → systemd unit <name>.service (/etc/systemd/system/, auto sudo)
+ *   - Windows → scheduled task (Task Scheduler / schtasks, starts at logon, no admin),
+ *              hidden window (no black console); PowerShell launcher and task XML live in
  *              %APPDATA%\pi-web-ui\
  *
- * 环境变量（前台与系统服务均适用）：PORT / PI_WEB_CWD / PI_WEB_DATA_DIR /
- * PI_CODING_AGENT_DIR。
+ * Environment (foreground and system service): PORT / PI_WEB_CWD / PI_WEB_DATA_DIR /
+ * PI_CODING_AGENT_DIR.
  */
 import { spawnSync } from "node:child_process";
 import { createConnection } from "node:net";
@@ -64,43 +64,43 @@ try {
 
 const HELP = `pi-web-ui v${pkg.version} — web chat for the pi coding agent
 
-用法:
-  pi-web-ui                               启动服务器（前台，Ctrl+C 停止，自动打开浏览器）
-  pi-web-ui --port 9000 --cwd /path       启动并指定端口 / 工作目录 / 数据目录
-  pi-web-ui --no-browser                  启动但不自动打开浏览器
-  pi-web-ui server install [选项]         安装系统服务（开机自启）并启动
-  pi-web-ui server shortcut [选项]        在桌面创建「一键启动」图标（启动服务并打开浏览器）
-  pi-web-ui server uninstall [选项]       卸载系统服务（同时移除桌面图标）
-  pi-web-ui server start|stop|restart|status [选项]
-  pi-web-ui server quiesce [选项]          进入排空模式：拒绝新的对话/消息/编辑，存量运行继续跑完
-  pi-web-ui server unquiesce [选项]        解除排空模式，恢复接收新工作
+Usage:
+  pi-web-ui                               Start the server (foreground, Ctrl+C to stop, opens the browser)
+  pi-web-ui --port 9000 --cwd /path       Start with a port / workspace / data directory
+  pi-web-ui --no-browser                  Start without opening the browser
+  pi-web-ui server install [options]      Install a system service (starts on login) and start it
+  pi-web-ui server shortcut [options]     Create a desktop "one-click start" icon (starts the server and opens the browser)
+  pi-web-ui server uninstall [options]    Uninstall the system service (also removes the desktop icon)
+  pi-web-ui server start|stop|restart|status [options]
+  pi-web-ui server quiesce [options]      Drain mode: reject new chats/messages/edits; in-flight work finishes
+  pi-web-ui server unquiesce [options]    Leave drain mode and accept new work again
   pi-web-ui --version / --help
 
-server 选项:
-  --port <n>        端口（默认 8787，或 $PORT）
-  --cwd <dir>       工作目录（默认 $PI_WEB_CWD 或当前目录）
-  --data-dir <dir>  会话数据目录（默认 <cwd>/.pi-web）
-  --name <name>     服务名（默认 pi-web-ui；macOS 的 launchd label
-                    为 com.xingshuyin.pi-web-ui，自定义名时为 com.<name>.server）
-  --print           只打印将生成的配置文件，不实际安装
+server options:
+  --port <n>        Port (default 8787, or $PORT)
+  --cwd <dir>       Workspace (default $PI_WEB_CWD or the current directory)
+  --data-dir <dir>  Session data directory (default <cwd>/.pi-web)
+  --name <name>     Service name (default pi-web-ui; macOS launchd label
+                    is com.xingshuyin.pi-web-ui, or com.<name>.server when customized)
+  --print           Print the generated config file without installing
 
-平台: macOS → launchd 用户代理 · Linux → systemd · Windows → 计划任务（schtasks）
-      （Windows 任务登录后自启、无需管理员、隐藏窗口运行；stop 停止，uninstall 移除）
-快捷方式: Windows → 桌面 .lnk · macOS → 桌面 .command 启动器 · Linux → 桌面 .desktop 图标
+Platforms: macOS → launchd user agent · Linux → systemd · Windows → scheduled task (schtasks)
+      (Windows task starts on login, no admin required, hidden window; stop to stop, uninstall to remove)
+Shortcuts: Windows → desktop .lnk · macOS → desktop .command launcher · Linux → desktop .desktop icon
 
-界面插件（安装到 <data-dir>/plugins/，服务运行中刷新浏览器即生效）:
-  pi-web-ui install <源>            从 GitHub 安装界面插件
-  pi-web-ui uninstall <id>          卸载已安装的界面插件
-  pi-web-ui plugins                 列出已安装的界面插件
+UI plugins (install to <data-dir>/plugins/; refresh the browser while the server is running):
+  pi-web-ui install <source>        Install a UI plugin from GitHub
+  pi-web-ui uninstall <id>          Uninstall an installed UI plugin
+  pi-web-ui plugins                 List installed UI plugins
 
-  源写法: owner/repo · https://github.com/owner/repo · 本地目录路径
-          URL 带 /tree/<分支>/<子目录> 可指定分支与仓库内子目录；任意写法
-          末尾加 #<分支或tag> 也可指定分支（如 owner/repo#v1.2）
-  install 选项: --name <id> 自定义插件目录名（默认取仓库名）
-                --data-dir <dir> 数据目录（默认 ~/.pi-web）
-                --force 目标已存在时覆盖
+  Source: owner/repo · https://github.com/owner/repo · local directory
+          A URL with /tree/<branch>/<subdir> selects a branch and subdirectory;
+          append #<branch-or-tag> on any form (e.g. owner/repo#v1.2)
+  install options: --name <id> custom plugin directory name (default: repo name)
+                   --data-dir <dir> data directory (default ~/.pi-web)
+                   --force overwrite if the target already exists
 
-环境变量（前台与系统服务均适用）:
+Environment (foreground and system service):
   PORT / PI_WEB_CWD / PI_WEB_DATA_DIR / PI_CODING_AGENT_DIR
 `;
 
@@ -114,9 +114,9 @@ function checkNodeVersion() {
 		(v[0] === NODE_MIN[0] && v[1] === NODE_MIN[1] && v[2] < NODE_MIN[2]);
 	if (tooOld) {
 		console.error(
-			`✖ pi-web-ui 需要 Node.js >= ${NODE_MIN.join(".")}（当前 ${process.versions.node}）。\n` +
-				`  pi SDK 的代码使用了 import attributes（with）语法，旧版 Node 无法解析。\n` +
-				`  请升级 Node：https://nodejs.org（或 nvm-windows / fnm）后重装：npm i -g pi-web-ui`,
+			`✖ pi-web-ui requires Node.js >= ${NODE_MIN.join(".")} (current ${process.versions.node}).\n` +
+				`  The pi SDK uses import attributes (with { type: "json" }), which older Node cannot parse.\n` +
+				`  Upgrade Node at https://nodejs.org (or nvm-windows / fnm), then reinstall: npm i -g pi-web-ui`,
 		);
 		process.exit(1);
 	}
@@ -162,7 +162,7 @@ function parseFlags(argv) {
 				i++;
 				return argv[i];
 			}
-			fail(`缺少选项 ${flag} 的值`);
+			fail(`missing value for ${flag}`);
 		};
 		switch (key) {
 			case "--port":
@@ -197,7 +197,7 @@ function parseFlags(argv) {
 				opts.help = true;
 				break;
 			default:
-				if (key.startsWith("-")) fail(`未知选项: ${key}`);
+				if (key.startsWith("-")) fail(`unknown option: ${key}`);
 				positionals.push(a);
 		}
 	}
@@ -205,7 +205,7 @@ function parseFlags(argv) {
 }
 
 // ---------------------------------------------------------------------------
-// 前台启动
+// Foreground start
 // ---------------------------------------------------------------------------
 
 /** Open a URL in the OS default browser; failures are ignored (best-effort). */
@@ -218,15 +218,15 @@ function openBrowser(url) {
 	} else {
 		res = spawnSync("xdg-open", [url], { stdio: "ignore" });
 	}
-	// spawnSync 不抛异常：命令缺失（headless 服务器）时在返回对象里带 error 字段。
+	// spawnSync does not throw: a missing opener (headless server) puts an error field on the result.
 	if (res?.error) {
 		if (res.error.code === "ENOENT") {
 			console.warn(
-				`[browser] 未找到打开器 (${res.error.path || "command not found"})，` +
-					"headless 服务器可用 --no-browser 关闭自动打开"
+				`[browser] no opener found (${res.error.path || "command not found"}); ` +
+					"use --no-browser on a headless server to skip auto-open"
 			);
 		} else {
-			console.warn("[browser] 打开浏览器失败:", res.error.message);
+			console.warn("[browser] failed to open the browser:", res.error.message);
 		}
 	}
 }
@@ -243,7 +243,7 @@ function openBrowserWhenUp(url) {
 	const attempt = () => {
 		const req = httpGet(url, (res) => {
 			res.resume();
-			console.log(`  🌐 已自动打开浏览器：${url}（--no-browser 可关闭）`);
+			console.log(`  🌐 opened browser: ${url} (--no-browser to skip)`);
 			openBrowser(url);
 		});
 		req.setTimeout(1000, () => {
@@ -269,7 +269,7 @@ async function startForeground(opts) {
 }
 
 // ---------------------------------------------------------------------------
-// 系统服务管理
+// System service management
 // ---------------------------------------------------------------------------
 
 const isMac = process.platform === "darwin";
@@ -340,16 +340,16 @@ function winTaskExists(name) {
 }
 
 // ---------------------------------------------------------------------------
-// 桌面快捷方式（server shortcut）
+// Desktop shortcut (server shortcut)
 // ---------------------------------------------------------------------------
 
-const SHORTCUT_LNK_NAME = "pi-web-ui.lnk"; // Windows 桌面快捷方式
-const SHORTCUT_MAC_NAME = "pi-web-ui.command"; // macOS 双击启动器
-const SHORTCUT_LINUX_NAME = "pi-web-ui.desktop"; // Linux 桌面图标
+const SHORTCUT_LNK_NAME = "pi-web-ui.lnk"; // Windows desktop shortcut
+const SHORTCUT_MAC_NAME = "pi-web-ui.command"; // macOS double-click launcher
+const SHORTCUT_LINUX_NAME = "pi-web-ui.desktop"; // Linux desktop icon
 
-/** 快捷方式图标（品牌 .ico，随包发布；.lnk / .desktop 指向它）。 */
-const APP_ICO_NAME = "pi-web-ui-logo.ico"; // 复制到用户目录后的稳定文件名（避开 pi-web-ui.ico —— Windows 对该路径有损坏的图标缓存残留，见 issue #xxx）
-const APP_ICO_SOURCE = join(BIN_DIR, "..", "web", "public", "icon.ico"); // 包内品牌图标源文件（10 帧多分辨率，DPI 密度帧保证桌面/任务栏各尺寸颜色不失真）
+/** Shortcut icon (branded .ico, shipped with the package; .lnk / .desktop point at it). */
+const APP_ICO_NAME = "pi-web-ui-logo.ico"; // Stable filename after copy into the user dir (avoid pi-web-ui.ico — Windows has a stale/corrupt icon cache for that path)
+const APP_ICO_SOURCE = join(BIN_DIR, "..", "web", "public", "icon.ico"); // Packaged brand icon source (10 multi-resolution frames; DPI density frames keep desktop/taskbar colors sharp)
 /** Branded SVG logo (source of truth: web/public/favicon.svg) — used on Linux. */
 const APP_SVG_PACKAGE = join(BIN_DIR, "..", "web", "public", "favicon.svg");
 
@@ -462,25 +462,25 @@ function buildWinShortcutPs1(env, cwd, taskName, url, logPath, pidPath) {
 		"}",
 		"function Open-Browser { Start-Process $url | Out-Null }",
 		"",
-		"# 已在运行 → 直接打开浏览器",
+		"# Already running → just open the browser",
 		"if (Test-Up) { Open-Browser; exit 0 }",
 		"",
-		"# 已安装计划任务 → 走服务启动（server stop 可管理）",
+		"# Scheduled task installed → start the service (manageable via server stop)",
 		"if (Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue) {",
 		"  schtasks /Run /TN $taskName | Out-Null",
 		"  for ($i = 0; $i -lt 120; $i++) {",
 		"    Start-Sleep -Milliseconds 250",
 		"    if (Test-Up) { Open-Browser; exit 0 }",
 		"  }",
-		"  Write-Host ('✖ pi-web-ui 服务未在 30 秒内就绪，请查看日志: ' + $log)",
+		"  Write-Host ('✖ pi-web-ui did not become ready within 30s; see the log: ' + $log)",
 		"  exit 1",
 		"}",
 		"",
-		"# 未安装服务 → 在本隐藏窗口中前台运行（记录 PID，server stop 可停止）",
+		"# No service installed → run in the foreground of this hidden window (record PID so server stop can terminate it)",
 		`$PID | Out-File -Encoding ascii $pidFile`,
 		sets,
 		`Set-Location ${psQuote(cwd)}`,
-		"# 后台轮询，就绪后打开浏览器（与前台 node 并行）",
+		"# Poll in the background and open the browser when ready (in parallel with foreground node)",
 		"$job = Start-Job -ScriptBlock { param($u)",
 		"  $h = $u + '/api/health'",
 		"  for ($i = 0; $i -lt 120; $i++) {",
@@ -504,9 +504,9 @@ function buildWinShortcutPs1(env, cwd, taskName, url, logPath, pidPath) {
  */
 function buildWinShortcutVbs(ps1Path) {
 	const cmd = `${winPowershell()} -NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -File "${ps1Path}"`;
-	// VBScript 字符串没有 \" 转义（也没有 \uXXXX），内嵌引号必须写成 ""；
-	// 不能用 JSON.stringify —— 它输出 \" 会在 VBScript 里提前结束字符串（语句未结束 800A0401），
-	// 且会把非 ASCII 路径转成 \uXXXX 字面量（wscript 不识别，中文用户名直接变成乱码路径）。
+	// VBScript strings have no \" escape (and no \uXXXX); embedded quotes must be written as "";
+	// JSON.stringify cannot be used — it emits \" which ends the VBScript string early (800A0401),
+	// and turns non-ASCII paths into \uXXXX literals (wscript does not decode them, so Chinese usernames become garbage paths).
 	const vbsCmd = cmd.replace(/"/g, '""');
 	return [
 		"Option Explicit",
@@ -542,15 +542,15 @@ function installWinShortcut(opts) {
 		return;
 	}
 	mkdirSync(dirname(ps1Path), { recursive: true });
-	writeFileSync(ps1Path, "\uFEFF" + ps1, "utf8"); // PS 5.1 需要 BOM
+	writeFileSync(ps1Path, "\uFEFF" + ps1, "utf8"); // PS 5.1 needs a BOM
 	// wscript host + VBS launcher: no console window / taskbar black box on double-click.
 	const vbsPath = winShortcutVbsPath(name);
-	writeFileSync(vbsPath, "\uFEFF" + buildWinShortcutVbs(ps1Path), "utf16le"); // wscript 只认 UTF-16/ANSI，UTF-8 BOM 会报“无效字符”，中文路径用 utf16le + BOM
-	// 把品牌图标准备好：复制到用户目录（.lnk 图标指向稳定路径）
+	writeFileSync(vbsPath, "\uFEFF" + buildWinShortcutVbs(ps1Path), "utf16le"); // wscript only accepts UTF-16/ANSI; a UTF-8 BOM reports "invalid character"; utf16le + BOM keeps non-ASCII paths intact
+	// Stage the brand icon: copy into the user dir (.lnk icon points at a stable path)
 	if (existsSync(APP_ICO_SOURCE)) {
 		copyFileSync(APP_ICO_SOURCE, winIcoPath());
 	} else {
-		console.log(`⚠ 未找到品牌图标 ${APP_ICO_SOURCE}，快捷方式将使用默认图标`);
+		console.log(`⚠ brand icon not found at ${APP_ICO_SOURCE}; the shortcut will use the default icon`);
 	}
 	const powershell = winPowershell();
 	const ps = [
@@ -561,7 +561,7 @@ function installWinShortcut(opts) {
 		`$lnk.TargetPath = ${psQuote(winWscript())}`,
 		`$lnk.Arguments = ${psQuote(vbsPath)}`,
 		`$lnk.WorkingDirectory = ${psQuote(cwd)}`,
-		"$lnk.Description = 'pi-web-ui — 双击启动服务并打开浏览器'",
+		"$lnk.Description = 'pi-web-ui — double-click to start the server and open the browser'",
 		`$lnk.IconLocation = ${psQuote(winIcoPath())} + ',0'`,
 		"$lnk.Save()",
 		`Write-Output (Join-Path $desktop ${psQuote(SHORTCUT_LNK_NAME)})`,
@@ -579,14 +579,14 @@ function installWinShortcut(opts) {
 		{ encoding: "utf8" },
 	);
 	if (res.status !== 0) {
-		fail(`创建桌面快捷方式失败: ${(res.stderr || res.stdout || "").trim()}`);
+		fail(`failed to create desktop shortcut: ${(res.stderr || res.stdout || "").trim()}`);
 	}
 	const lnk = (res.stdout ?? "").trim();
-	console.log(`✅ 已创建桌面快捷方式: ${lnk}`);
-	console.log(`   双击 : 服务未运行则启动（隐藏窗口，无黑窗），就绪后自动打开浏览器`);
-	console.log(`   停止 : pi-web-ui server stop（快捷方式启动的实例也会一并停止）`);
-	console.log(`   端口 : ${port}`);
-	console.log(`   目录 : ${cwd}`);
+	console.log(`✅ created desktop shortcut: ${lnk}`);
+	console.log(`   Double-click : starts the server if it is not running (hidden window, no black console) and opens the browser when ready`);
+	console.log(`   Stop        : pi-web-ui server stop (also stops an instance started from the shortcut)`);
+	console.log(`   Port      : ${port}`);
+	console.log(`   Directory : ${cwd}`);
 }
 
 /** macOS: double-clickable .command launcher (the .lnk equivalent). */
@@ -596,10 +596,10 @@ function buildMacShortcut(label, plist, url, env) {
 		.join("\n");
 	const node = realNode();
 	return `#!/bin/bash
-# pi-web-ui 启动器 — generated by: pi-web-ui server shortcut
-# 双击运行：确保服务在运行，然后打开浏览器。
-#   · 已安装 launchd 服务（登录自启）→ kickstart，图标主要用于「启动 + 打开」
-#   · 未安装服务 → 在本终端前台运行（关闭窗口即停止）
+# pi-web-ui launcher — generated by: pi-web-ui server shortcut
+# Double-click: make sure the server is running, then open the browser.
+#   · launchd service installed (starts at login) → kickstart; the icon is mainly "start + open"
+#   · no service installed → run in the foreground of this terminal (closing the window stops it)
 LABEL=${shQuote(label)}
 PLIST=${shQuote(plist)}
 URL=${shQuote(url)}
@@ -613,13 +613,13 @@ if launchctl print "gui/$(id -u)/$LABEL" >/dev/null 2>&1; then
 elif [ -f "$PLIST" ]; then
   launchctl bootstrap "gui/$(id -u)" "$PLIST"
 else
-  # 未安装服务：在本终端前台运行服务器（关闭窗口即停止）
+  # No service installed: run the server in the foreground of this terminal (closing the window stops it)
   "$NODE" "$ENTRY" >>"$LOG" 2>&1 &
   SERVER_PID=$!
   trap 'kill "$SERVER_PID" 2>/dev/null' EXIT
 fi
 
-# 等服务就绪后打开浏览器（最多约 30 秒）
+# Wait until the server is ready, then open the browser (up to ~30s)
 for i in $(seq 1 120); do
   curl -sf "$URL/api/health" >/dev/null 2>&1 && break
   sleep 0.25
@@ -645,12 +645,12 @@ function installMacShortcut(opts) {
 	}
 	writeFileSync(path, script);
 	chmodSync(path, 0o755);
-	console.log(`✅ 已创建桌面启动器: ${path}`);
-	console.log(`   双击 : 确保服务运行并打开浏览器；未安装服务时在本终端前台运行`);
-	console.log(`   说明 : macOS 没有 Windows 式快捷方式，这是等价的 .command 启动器；`);
-	console.log(`          launchd 服务登录自启，图标主要用于快速「启动 + 打开浏览器」`);
-	console.log(`   端口 : ${port}`);
-	console.log(`   目录 : ${cwd}`);
+	console.log(`✅ created desktop launcher: ${path}`);
+	console.log(`   Double-click : make sure the server is running and open the browser; if no service is installed, runs in this terminal`);
+	console.log(`   Note        : macOS has no Windows-style shortcut; this is the equivalent .command launcher;`);
+	console.log(`                 the launchd service starts at login; the icon is mainly a quick "start + open browser"`);
+	console.log(`   Port      : ${port}`);
+	console.log(`   Directory : ${cwd}`);
 }
 
 /** Linux: launcher script run by the .desktop icon. */
@@ -658,10 +658,10 @@ function buildLinuxStartScript(unitName, url) {
 	const log = join(homedir(), ".local", "share", "pi-web-ui", "pi-web-ui.log");
 	const node = realNode();
 	return `#!/bin/bash
-# pi-web-ui 启动器 — generated by: pi-web-ui server shortcut
-# 双击运行：确保服务在运行，然后打开浏览器。
-#   · systemd 单元已安装 → systemctl start（系统单元需要授权，失败则前台运行）
-#   · 未安装 → 在本进程前台运行（终端关闭即停止）
+# pi-web-ui launcher — generated by: pi-web-ui server shortcut
+# Double-click: make sure the server is running, then open the browser.
+#   · systemd unit installed → systemctl start (system units need authorization; falls back to foreground)
+#   · not installed → run in the foreground of this process (closing the terminal stops it)
 LOG=${shQuote(log)}
 URL=${shQuote(url)}
 NODE=${shQuote(node)}
@@ -693,7 +693,7 @@ function installLinuxShortcut(opts) {
 	const scriptDir = join(homedir(), ".local", "share", "pi-web-ui");
 	const scriptPath = join(scriptDir, `${name}-start.sh`);
 	const desktopPath = join(homedir(), "Desktop", SHORTCUT_LINUX_NAME);
-	const icoPath = join(scriptDir, APP_ICO_NAME); // 备用；优先 SVG
+	const icoPath = join(scriptDir, APP_ICO_NAME); // fallback; SVG is preferred
 	const svgPath = join(scriptDir, "pi-web-ui.svg");
 	const script = buildLinuxStartScript(name, url);
 	const desktopIcon = existsSync(APP_SVG_PACKAGE) ? svgPath : APP_ICO_NAME;
@@ -701,7 +701,7 @@ function installLinuxShortcut(opts) {
 Version=1.0
 Type=Application
 Name=pi-web-ui
-Comment=启动 pi-web-ui 服务并打开浏览器
+Comment=Start the pi-web-ui server and open the browser
 Exec=${shQuote(scriptPath)}
 Icon=${shQuote(desktopIcon)}
 Terminal=false
@@ -713,22 +713,22 @@ Categories=Network;WebBrowser;
 		return;
 	}
 	mkdirSync(scriptDir, { recursive: true });
-	// 品牌图标（缺失时跳过，桌面自动回退默认图标）
+	// Brand icon (skip if missing; the desktop falls back to a default icon)
 	if (existsSync(APP_SVG_PACKAGE)) copyFileSync(APP_SVG_PACKAGE, svgPath);
 	else if (existsSync(APP_ICO_SOURCE)) copyFileSync(APP_ICO_SOURCE, icoPath);
 	writeFileSync(scriptPath, script);
 	chmodSync(scriptPath, 0o755);
 	writeFileSync(desktopPath, desktop);
 	chmodSync(desktopPath, 0o755);
-	// GNOME 需要标记可信才能双击运行
+	// GNOME needs a trusted mark before double-click will run it
 	run("gio", ["set", desktopPath, "metadata::trusted", "true"], {
 		ignoreError: true,
 		silent: true,
 	});
-	console.log(`✅ 已创建桌面图标: ${desktopPath}`);
-	console.log(`   GNOME 若提示「不受信任的应用程序」，右键选择 Allow Launching`);
-	console.log(`   端口 : ${port}`);
-	console.log(`   目录 : ${cwd}`);
+	console.log(`✅ created desktop icon: ${desktopPath}`);
+	console.log(`   If GNOME says "Untrusted application", right-click and choose Allow Launching`);
+	console.log(`   Port      : ${port}`);
+	console.log(`   Directory : ${cwd}`);
 }
 
 /** Remove desktop shortcut artifacts created by `server shortcut`. */
@@ -941,10 +941,10 @@ function serviceOptions(opts) {
 	const name = opts.name ?? "pi-web-ui";
 	const port = String(opts.port ?? process.env.PORT ?? "8787");
 	if (!/^\d{1,5}$/.test(port) || Number(port) < 1 || Number(port) > 65535) {
-		fail(`无效端口: ${port}`);
+		fail(`invalid port: ${port}`);
 	}
 	const cwd = resolve(opts.cwd ?? process.env.PI_WEB_CWD ?? process.cwd());
-	if (!existsSync(cwd)) fail(`工作目录不存在: ${cwd}`);
+	if (!existsSync(cwd)) fail(`workspace does not exist: ${cwd}`);
 	let dataDir;
 	if (opts.dataDir) {
 		dataDir = resolve(opts.dataDir);
@@ -989,13 +989,13 @@ function installLaunchd(opts) {
 	mkdirSync(dirname(plist), { recursive: true });
 	writeFileSync(plist, content);
 	run("launchctl", ["bootstrap", `gui/${uid()}`, plist]);
-	console.log(`✅ 已安装并启动 launchd 服务 ${label}`);
-	console.log(`   端口 : ${port}`);
-	console.log(`   目录 : ${cwd}`);
-	console.log(`   访问 : http://localhost:${port}`);
-	console.log(`   日志 : /tmp/pi-web-ui.log  /tmp/pi-web-ui.err`);
-	console.log(`   管理 : pi-web-ui server status|restart|stop|uninstall`);
-	console.log(`   提示 : pi-web-ui server shortcut 可在桌面创建「一键启动」图标`);
+	console.log(`✅ installed and started launchd service ${label}`);
+	console.log(`   Port      : ${port}`);
+	console.log(`   Directory : ${cwd}`);
+	console.log(`   URL       : http://localhost:${port}`);
+	console.log(`   Log       : /tmp/pi-web-ui.log  /tmp/pi-web-ui.err`);
+	console.log(`   Manage    : pi-web-ui server status|restart|stop|uninstall`);
+	console.log(`   Tip       : pi-web-ui server shortcut creates a desktop "one-click start" icon`);
 }
 
 function installSystemd(opts) {
@@ -1010,13 +1010,13 @@ function installSystemd(opts) {
 	writeFileSync(unitPath, content);
 	run("systemctl", ["daemon-reload"]);
 	run("systemctl", ["enable", "--now", `${name}.service`]);
-	console.log(`✅ 已安装并启动 systemd 服务 ${name}.service`);
-	console.log(`   端口 : ${port}`);
-	console.log(`   目录 : ${cwd}`);
-	console.log(`   访问 : http://localhost:${port}`);
-	console.log(`   日志 : journalctl -u ${name}.service -f`);
-	console.log(`   管理 : pi-web-ui server status|restart|stop|uninstall`);
-	console.log(`   提示 : pi-web-ui server shortcut 可在桌面创建「一键启动」图标`);
+	console.log(`✅ installed and started systemd service ${name}.service`);
+	console.log(`   Port      : ${port}`);
+	console.log(`   Directory : ${cwd}`);
+	console.log(`   URL       : http://localhost:${port}`);
+	console.log(`   Log       : journalctl -u ${name}.service -f`);
+	console.log(`   Manage    : pi-web-ui server status|restart|stop|uninstall`);
+	console.log(`   Tip       : pi-web-ui server shortcut creates a desktop "one-click start" icon`);
 }
 
 function uninstallLaunchd(opts) {
@@ -1029,8 +1029,8 @@ function uninstallLaunchd(opts) {
 	});
 	if (existsSync(plist)) rmSync(plist);
 	removeShortcut(name);
-	console.log(`🗑  已卸载 ${label}（plist 已删除，不再开机自启）`);
-	console.log(`🗑  已移除桌面快捷方式`);
+	console.log(`🗑  uninstalled ${label} (plist removed, will not start at login)`);
+	console.log(`🗑  removed desktop shortcut`);
 }
 
 function uninstallSystemd(opts) {
@@ -1043,8 +1043,8 @@ function uninstallSystemd(opts) {
 	if (existsSync(unitPath)) rmSync(unitPath);
 	run("systemctl", ["daemon-reload"]);
 	removeShortcut(name);
-	console.log(`🗑  已卸载 ${name}.service（不再开机自启）`);
-	console.log(`🗑  已移除桌面快捷方式`);
+	console.log(`🗑  uninstalled ${name}.service (will not start at login)`);
+	console.log(`🗑  removed desktop shortcut`);
 }
 
 function installWindows(opts) {
@@ -1074,16 +1074,16 @@ function installWindows(opts) {
 	}
 	run("schtasks", ["/Create", "/TN", name, "/XML", xmlPath, "/F"]);
 	run("schtasks", ["/Run", "/TN", name], { ignoreError: true });
-	console.log(`✅ 已安装并启动计划任务 ${name}（隐藏窗口运行，无黑窗）`);
-	console.log(`   端口 : ${port}`);
-	console.log(`   目录 : ${cwd}`);
-	console.log(`   访问 : http://localhost:${port}`);
-	console.log(`   日志 : ${winLogPath()}`);
+	console.log(`✅ installed and started scheduled task ${name} (hidden window, no black console)`);
+	console.log(`   Port      : ${port}`);
+	console.log(`   Directory : ${cwd}`);
+	console.log(`   URL       : http://localhost:${port}`);
+	console.log(`   Log       : ${winLogPath()}`);
 	console.log(
-		`   说明 : 登录后自启（与 launchd 用户代理一致）；stop 停止，uninstall 移除`,
+		`   Note    : starts at logon (same as a launchd user agent); stop to stop, uninstall to remove`,
 	);
-	console.log(`   管理 : pi-web-ui server status|restart|stop|uninstall`);
-	console.log(`   提示 : pi-web-ui server shortcut 可在桌面创建「一键启动」图标`);
+	console.log(`   Manage    : pi-web-ui server status|restart|stop|uninstall`);
+	console.log(`   Tip       : pi-web-ui server shortcut creates a desktop "one-click start" icon`);
 }
 
 function uninstallWindows(opts) {
@@ -1094,7 +1094,7 @@ function uninstallWindows(opts) {
 	for (const f of [winCmdPath(name), winPs1Path(name), winTaskXmlPath(name)]) {
 		if (existsSync(f)) rmSync(f);
 	}
-	// 快捷方式启动的隐藏实例
+	// Hidden instance started from the shortcut
 	const pid = winReadPid(name);
 	if (pid && pidAlive(pid)) {
 		run("taskkill", ["/PID", String(pid), "/T", "/F"], {
@@ -1103,8 +1103,8 @@ function uninstallWindows(opts) {
 		});
 	}
 	removeShortcut(name);
-	console.log(`🗑  已卸载 ${name}（计划任务已删除，不再自启）`);
-	console.log(`🗑  已移除桌面快捷方式`);
+	console.log(`🗑  uninstalled ${name} (scheduled task removed, will not auto-start)`);
+	console.log(`🗑  removed desktop shortcut`);
 }
 
 // ---------------------------------------------------------------------------
@@ -1163,17 +1163,17 @@ function controlCommand(opts, cmd) {
 async function printLiveStatus(opts) {
 	const st = await controlCommand(opts, "status");
 	if (!st || !st.ok) {
-		console.log("   (服务器未运行或控制通道不可达 — 启动后可查 server status 实时信息)");
+		console.log("   (server is not running or the control channel is unreachable — start it, then server status shows live info)");
 		return;
 	}
-	console.log("   --- 实时状态 (control socket) ---");
-	console.log(`   版本 : ${st.version} · PID ${st.pid}`);
-	console.log(`   目录 : ${st.cwd}`);
+	console.log("   --- live status (control socket) ---");
+	console.log(`   Version : ${st.version} · PID ${st.pid}`);
+	console.log(`   Directory : ${st.cwd}`);
 	console.log(
-		`   排空 : ${st.quiesced ? `是（自 ${new Date(st.quiescedSince).toLocaleString()}）` : "否"}`,
+		`   Drain   : ${st.quiesced ? `yes (since ${new Date(st.quiescedSince).toLocaleString()})` : "no"}`,
 	);
 	console.log(
-		`   连接 : ${st.connectedClients} 个浏览器 · ${st.activeConversations} 个运行中对话 · ${st.pendingMessages} 条排队消息`,
+		`   Clients : ${st.connectedClients} browser(s) · ${st.activeConversations} running conversation(s) · ${st.pendingMessages} queued message(s)`,
 	);
 }
 
@@ -1181,13 +1181,13 @@ async function printLiveStatus(opts) {
 async function setQuiesce(opts, on) {
 	const st = await controlCommand(opts, on ? "quiesce" : "unquiesce");
 	if (!st || !st.ok) {
-		fail(`服务器未运行或控制通道不可达（${controlPath(opts)}）`);
+		fail(`server is not running or the control channel is unreachable (${controlPath(opts)})`);
 	}
 	console.log(
 		on
-			? "⏸  已进入排空模式（quiesce）：拒绝新的对话/消息/编辑，存量运行继续跑完。\n" +
-				"    跑完后用 pi-web-ui server unquiesce 恢复。"
-			: "▶  已解除排空模式（unquiesce）：恢复接收新的对话/消息/编辑。",
+			? "⏸  Drain mode on (quiesce): new chats/messages/edits are rejected; in-flight work finishes.\n" +
+				"    Use pi-web-ui server unquiesce to accept new work again."
+			: "▶  Drain mode off (unquiesce): accepting new chats/messages/edits again.",
 	);
 }
 
@@ -1207,9 +1207,9 @@ function controlService(action, opts) {
 					encoding: "utf8",
 				});
 				const state = (res.stdout.match(/state = (\w+)/) ?? [])[1] ?? "loaded";
-				console.log(`${label}: ${state}（已加载，开机自启中）`);
+				console.log(`${label}: ${state} (loaded, starts at login)`);
 			} else {
-				console.log(`${label}: 未安装（运行 pi-web-ui server install 安装）`);
+				console.log(`${label}: not installed (run pi-web-ui server install)`);
 			}
 			return;
 		}
@@ -1220,18 +1220,18 @@ function controlService(action, opts) {
 			} else {
 				const plist = launchAgentPlist(name);
 				if (!existsSync(plist)) {
-					fail(`找不到 ${plist}，请先运行 pi-web-ui server install`);
+					fail(`${plist} not found; run pi-web-ui server install first`);
 				}
 				run("launchctl", ["bootstrap", `gui/${uid()}`, plist]);
 			}
-			console.log(`✅ 已启动 ${label}`);
+			console.log(`✅ started ${label}`);
 			return;
 		}
 
 		if (action === "restart") {
-			if (!loaded()) fail(`${label} 未加载，请先 pi-web-ui server start`);
+			if (!loaded()) fail(`${label} is not loaded; run pi-web-ui server start first`);
 			run("launchctl", ["kickstart", "-k", target]);
-			console.log(`✅ 已重启 ${label}`);
+			console.log(`✅ restarted ${label}`);
 			return;
 		}
 
@@ -1240,11 +1240,11 @@ function controlService(action, opts) {
 				ignoreError: true,
 				silent: true,
 			});
-			console.log(`⏹  已停止 ${label}（已卸载，不再开机自启；start 恢复）`);
+			console.log(`⏹  stopped ${label} (unloaded, will not start at login; start to restore)`);
 			return;
 		}
 
-		fail(`未知操作: ${action}`);
+		fail(`unknown action: ${action}`);
 	}
 
 	if (isLinux) {
@@ -1265,8 +1265,8 @@ function controlService(action, opts) {
 			const pid = winReadPid(name);
 			const instAlive = pid && pidAlive(pid);
 			if (!exists) {
-				console.log(`${name}: 未安装（运行 pi-web-ui server install 安装）`);
-				if (instAlive) console.log(`   快捷方式实例 : 运行中 (PID ${pid})`);
+				console.log(`${name}: not installed (run pi-web-ui server install)`);
+				if (instAlive) console.log(`   Shortcut instance : running (PID ${pid})`);
 				return;
 			}
 			// Get-ScheduledTask outputs English state enums — locale-independent,
@@ -1289,32 +1289,32 @@ function controlService(action, opts) {
 				{ encoding: "utf8" },
 			);
 			if (ps.status !== 0 || (ps.stdout ?? "").includes("NOT_INSTALLED")) {
-				console.log(`${name}: 未安装（运行 pi-web-ui server install 安装）`);
+				console.log(`${name}: not installed (run pi-web-ui server install)`);
 				return;
 			}
-			console.log(`${name}: 计划任务\n${(ps.stdout ?? "").trim()}`);
+			console.log(`${name}: scheduled task\n${(ps.stdout ?? "").trim()}`);
 			if (pid) {
-				if (instAlive) console.log(`   快捷方式实例 : 运行中 (PID ${pid})`);
-				else console.log(`   快捷方式实例 : 已退出 (PID ${pid})`);
+				if (instAlive) console.log(`   Shortcut instance : running (PID ${pid})`);
+				else console.log(`   Shortcut instance : exited (PID ${pid})`);
 			}
 			return;
 		}
 
 		if (action === "start") {
-			if (!exists) fail(`${name} 不存在，请先运行 pi-web-ui server install`);
+			if (!exists) fail(`${name} does not exist; run pi-web-ui server install first`);
 			run("schtasks", ["/Run", "/TN", name]);
-			console.log(`✅ 已启动 ${name}`);
+			console.log(`✅ started ${name}`);
 			return;
 		}
 
 		if (action === "restart") {
-			if (!exists) fail(`${name} 不存在，请先运行 pi-web-ui server install`);
+			if (!exists) fail(`${name} does not exist; run pi-web-ui server install first`);
 			run("schtasks", ["/End", "/TN", name], {
 				ignoreError: true,
 				silent: true,
 			});
 			run("schtasks", ["/Run", "/TN", name]);
-			console.log(`✅ 已重启 ${name}`);
+			console.log(`✅ restarted ${name}`);
 			return;
 		}
 
@@ -1330,66 +1330,66 @@ function controlService(action, opts) {
 						ignoreError: true,
 						silent: true,
 					});
-					console.log(`⏹  已停止快捷方式实例 (PID ${pid})`);
+					console.log(`⏹  stopped shortcut instance (PID ${pid})`);
 				}
 				rmSync(winPidFilePath(name), { force: true });
 			}
-			console.log(`⏹  已停止 ${name}（自启保留；uninstall 移除）`);
+			console.log(`⏹  stopped ${name} (auto-start kept; uninstall to remove)`);
 			return;
 		}
 
-		fail(`未知操作: ${action}`);
+		fail(`unknown action: ${action}`);
 	}
 
 	fail(
-		`不支持的系统服务平台: ${process.platform}（仅 macOS / Linux / Windows）`,
+		`unsupported system-service platform: ${process.platform} (macOS / Linux / Windows only)`,
 	);
 }
 
 // ---------------------------------------------------------------------------
-// 界面插件管理（<dataDir>/plugins/，从 GitHub 安装）
+// UI plugin management (<dataDir>/plugins/, install from GitHub)
 // ---------------------------------------------------------------------------
 
-/** 合法插件 id（同 server/plugins.ts 的 ID_RE）。 */
+/** Valid plugin id (same ID_RE as server/plugins.ts). */
 const PLUGIN_ID_RE = /^[A-Za-z0-9_-]+$/;
 
-const PLUGIN_HELP = `用法:
-  pi-web-ui install <源> [选项]     安装 GitHub 上的界面插件
-  pi-web-ui uninstall <id> [选项]   卸载已安装的界面插件
-  pi-web-ui plugins [选项]          列出已安装的界面插件
+const PLUGIN_HELP = `Usage:
+  pi-web-ui install <source> [options]  Install a UI plugin from GitHub
+  pi-web-ui uninstall <id> [options]    Uninstall an installed UI plugin
+  pi-web-ui plugins [options]           List installed UI plugins
 
-源写法（任选其一）:
-  owner/repo                                        简写
-  https://github.com/owner/repo                     完整 URL（.git 可省）
-  https://github.com/o/r/tree/dev/sub/dir           指定分支 + 仓库内子目录
-  以上任意写法末尾加 #分支或tag                      指定分支/tag（如 owner/repo#v1.2）
-  /path/to/plugin-dir                               本地目录直接安装（开发调试用）
+Source (any of):
+  owner/repo                                        shorthand
+  https://github.com/owner/repo                     full URL (.git optional)
+  https://github.com/o/r/tree/dev/sub/dir           branch + subdirectory in the repo
+  any of the above plus #branch-or-tag              pin a branch/tag (e.g. owner/repo#v1.2)
+  /path/to/plugin-dir                               install a local directory (for development)
 
-install 选项:
-  --name <id>       插件目录名/id（默认取仓库名或 manifest.id，仅限字母数字-_）
-  --data-dir <dir>  数据目录（默认 ~/.pi-web 或 $PI_WEB_DATA_DIR）
-  --force           目标目录已存在时覆盖（覆盖前自动备份旧版本）
+install options:
+  --name <id>       plugin directory name/id (default: repo name or manifest.id; letters, digits, -_)
+  --data-dir <dir>  data directory (default ~/.pi-web or $PI_WEB_DATA_DIR)
+  --force           overwrite if the target exists (backs up the old version first)
 
-plugins 选项:
-  --check-updates   逐个对比最近安装版本与远端 HEAD，列出可更新插件
-  --rollback <id>   回滚到最近一份更新前备份（<dataDir>/plugin-backups/）
+plugins options:
+  --check-updates   compare each plugin's last installed version with remote HEAD
+  --rollback <id>   restore the most recent pre-update backup (<dataDir>/plugin-backups/)
 `;
 
 function pluginDataDir(opts) {
 	return resolve(opts.dataDir ?? process.env.PI_WEB_DATA_DIR ?? join(homedir(), ".pi-web"));
 }
 
-/** 解析安装源为 { owner, repo, ref, subpath, cloneUrl } 或本地路径；非法输入直接退出。 */
+/** Parse an install source into { owner, repo, ref, subpath, cloneUrl } or a local path; exits on invalid input. */
 function parsePluginSource(rawSpec) {
 	let spec = rawSpec.trim();
 	let ref;
 	const hash = spec.indexOf("#");
 	if (hash >= 0) {
 		ref = spec.slice(hash + 1).trim();
-		if (!ref) fail(`无效的源 "${rawSpec}"：# 后缺少分支/tag 名`);
+		if (!ref) fail(`invalid source "${rawSpec}": missing branch/tag after #`);
 		spec = spec.slice(0, hash).replace(/\/+$/, "");
 	}
-	// ssh 形式转 https 拉取（不要求本机配 ssh key）；URL 去掉协议前缀统一按路径段解析
+	// Convert ssh form to https (no local ssh key required); strip the URL scheme and parse path segments
 	const ssh = spec.match(/^git@([^:]+):(.+?)(?:\.git)?$/);
 	if (ssh) [, , spec] = ssh;
 	else {
@@ -1398,9 +1398,9 @@ function parsePluginSource(rawSpec) {
 	}
 	const segs = spec.split("/").filter(Boolean);
 	if (segs.length < 2)
-		fail(`无法识别的插件源 "${rawSpec}"\n${PLUGIN_HELP}`);
+		fail(`unrecognized plugin source "${rawSpec}"\n${PLUGIN_HELP}`);
 	for (const s of segs) {
-		if (s === "." || s === "..") fail(`无效的源 "${rawSpec}"：路径段不能是 . 或 ..`);
+		if (s === "." || s === "..") fail(`invalid source "${rawSpec}": path segments cannot be . or ..`);
 	}
 	const [owner, repo] = segs;
 	let subpath;
@@ -1408,12 +1408,12 @@ function parsePluginSource(rawSpec) {
 		if (!ref && segs.length > 3) ref = segs[3];
 		subpath = segs.slice(4).join("/") || undefined;
 	} else if (segs.length > 2) {
-		subpath = segs.slice(2).join("/"); // owner/repo/sub/dir —— 子目录写法
+		subpath = segs.slice(2).join("/"); // owner/repo/sub/dir — subdirectory form
 	}
 	return { owner, repo, ref, subpath, cloneUrl: `https://github.com/${owner}/${repo}.git` };
 }
 
-/** 把仓库拉到 tmpDir 并返回检出根目录。优先 git clone --depth 1，失败回退 codeload tarball + 系统 tar。 */
+/** Fetch the repo into tmpDir and return the checkout root. Prefer git clone --depth 1; fall back to a codeload tarball + system tar. */
 async function acquireRepo(src, tmpDir) {
 	const dst = join(tmpDir, "src");
 	const hasGit = spawnSync("git", ["--version"], { stdio: "ignore", timeout: 10_000 }).status === 0;
@@ -1428,47 +1428,47 @@ async function acquireRepo(src, tmpDir) {
 			timeout: 300_000,
 		});
 		if (res.status === 0 && existsSync(dst)) return dst;
-		console.log("· git clone 失败，回退到 tarball 直连下载…");
+		console.log("· git clone failed, falling back to a direct tarball download…");
 	}
 	const url = `https://codeload.github.com/${src.owner}/${src.repo}/tar.gz/${src.ref || "HEAD"}`;
-	console.log(`· 下载 ${url}`);
-	// 注意：这里不用 fail()/process.exit —— async 上下文里还有未关闭的 socket 时
-	// 直接退出会触发 Windows libuv "UV_HANDLE_CLOSING" 断言崩溃；改为 throw，
-	// 由 pluginInstallCmd 捕获后设 exitCode 让事件循环自然排空。
+	console.log(`· downloading ${url}`);
+	// Do not fail()/process.exit here — exiting while an async socket is still open
+	// trips a Windows libuv "UV_HANDLE_CLOSING" assertion; throw instead and let
+	// pluginInstallCmd catch it, set exitCode, and drain the event loop naturally.
 	let res;
 	try {
 		res = await fetch(url, { redirect: "follow", signal: AbortSignal.timeout(120_000) });
 	} catch (err) {
-		throw new Error(`下载失败：${err?.message ?? err}\n  请检查网络/代理后重试。`);
+		throw new Error(`download failed: ${err?.message ?? err}\n  check the network/proxy and retry.`);
 	}
 	if (!res.ok)
 		throw new Error(
-			`下载失败 HTTP ${res.status}：${url}` +
+			`download failed HTTP ${res.status}: ${url}` +
 				(res.status === 404
-					? "\n  仓库/分支不存在，或为私有仓库（私有仓库请先在本机配置好 git 凭据再重试，会优先走 git clone）。"
+					? "\n  the repo/branch does not exist, or it is private (configure git credentials locally and retry; git clone is tried first)."
 					: ""),
 		);
 	writeFileSync(join(tmpDir, "src.tar.gz"), Buffer.from(await res.arrayBuffer()));
 	const extractTo = join(tmpDir, "tar");
 	mkdirSync(extractTo, { recursive: true });
-	// 相对路径解压：win32 的 GNU tar 会把 "C:\..." 里的 C: 当远程主机（Cannot connect to C:）
+	// Extract via relative paths: win32 GNU tar treats the C: in "C:\..." as a remote host (Cannot connect to C:)
 	const tarRes = spawnSync("tar", ["-xzf", "src.tar.gz", "-C", "tar"], {
 		cwd: tmpDir,
 		stdio: "inherit",
 	});
-	if (tarRes.status !== 0) fail("tar 解压失败（可重试，或手动下载 release 包解压）");
+	if (tarRes.status !== 0) fail("tar extract failed (retry, or download the release tarball and unpack it yourself)");
 	const entries = readdirSync(extractTo);
-	if (entries.length !== 1) fail("tarball 解压结果异常（顶层应只有一个目录）");
+	if (entries.length !== 1) fail("unexpected tarball layout (expected a single top-level directory)");
 	return join(extractTo, entries[0]);
 }
 
-/** 在检出树里找包含 manifest.json 的目录（深度 ≤3，跳过 .git/node_modules）。 */
+/** Find directories that contain manifest.json in the checkout (depth ≤3, skip .git/node_modules). */
 function findManifestDirs(root) {
 	const hits = [];
 	const walk = (dir, depth) => {
 		if (existsSync(join(dir, "manifest.json"))) {
 			hits.push(dir);
-			return; // 目录本身是插件就不再往下搜嵌套插件
+			return; // this directory is itself a plugin; do not search nested plugins
 		}
 		if (depth >= 3) return;
 		for (const ent of readdirSync(dir, { withFileTypes: true })) {
@@ -1480,24 +1480,24 @@ function findManifestDirs(root) {
 	return hits;
 }
 
-/** 定位插件根目录：显式子路径 > 根目录 manifest > 全树搜索（唯一命中才继续）。 */
+/** Locate the plugin root: explicit subpath > root manifest > tree search (continue only on a unique hit). */
 function locatePluginRoot(checkout, subpath, repoLabel) {
 	if (subpath) {
 		const dir = join(checkout, ...subpath.split("/"));
 		if (!existsSync(join(dir, "manifest.json")))
-			fail(`子目录 "${subpath}" 里没有 manifest.json`);
+			fail(`no manifest.json in subdirectory "${subpath}"`);
 		return dir;
 	}
 	if (existsSync(join(checkout, "manifest.json"))) return checkout;
 	const hits = findManifestDirs(checkout);
 	if (hits.length === 0)
-		fail(`"${repoLabel}" 里没找到 manifest.json —— 不是 pi-web-ui 界面插件`);
+		fail(`no manifest.json in "${repoLabel}" — not a pi-web-ui UI plugin`);
 	if (hits.length > 1)
 		fail(
-			`${repoLabel} 里有多个插件（多个 manifest.json），请用子目录写法指定其中一个:\n  ` +
+			`${repoLabel} contains multiple plugins (multiple manifest.json files); specify one with a subdirectory path:\n  ` +
 				hits.map((h) => `${repoLabel}/${relative(checkout, h).split(/[\\/]/).join("/")}`).join("\n  "),
 		);
-	console.log(`· 插件位于子目录: ${relative(checkout, hits[0]).split(/[\\/]/).join("/")}`);
+	console.log(`· plugin is in subdirectory: ${relative(checkout, hits[0]).split(/[\\/]/).join("/")}`);
 	return hits[0];
 }
 
@@ -1508,10 +1508,10 @@ async function pluginInstallCmd(argv) {
 		return;
 	}
 	if (positionals.length !== 1)
-		fail(`用法: pi-web-ui install <源> [--name <id>] [--data-dir <dir>] [--force]\n${PLUGIN_HELP}`);
+		fail(`usage: pi-web-ui install <source> [--name <id>] [--data-dir <dir>] [--force]\n${PLUGIN_HELP}`);
 	const rawSpec = positionals[0];
 	const pluginsDir = join(pluginDataDir(opts), "plugins");
-	// 本地目录直接装（离线开发调试），否则从 GitHub 拉取
+	// Install a local directory as-is (offline development); otherwise fetch from GitHub
 	const localCandidate = resolve(rawSpec.replace(/^file:\/\//, ""));
 	const isLocal = existsSync(localCandidate);
 	const src = isLocal ? null : parsePluginSource(rawSpec);
@@ -1532,9 +1532,9 @@ async function pluginInstallCmd(argv) {
 		try {
 			manifest = JSON.parse(readFileSync(join(pluginRoot, "manifest.json"), "utf8"));
 		} catch (err) {
-			fail(`manifest.json 不是合法 JSON：${err?.message ?? err}`);
+			fail(`manifest.json is not valid JSON: ${err?.message ?? err}`);
 		}
-		// 默认 id：子目录名 > 仓库名 > 本地目录名
+		// Default id: subdirectory name > repo name > local directory name
 		const sourceName = src?.subpath
 			? src.subpath.split("/").pop()
 			: (src?.repo ?? localCandidate.split(/[\\/]/).pop());
@@ -1544,21 +1544,21 @@ async function pluginInstallCmd(argv) {
 				.replace(/^-+|-+$/g, "") || "plugin";
 		const id = opts.name ?? fallbackId;
 		if (!PLUGIN_ID_RE.test(id))
-			fail(`非法插件 id "${id}"（仅限字母数字-_，可用 --name <id> 自定义）`);
+			fail(`invalid plugin id "${id}" (letters, digits, -_ only; use --name <id> to override)`);
 		const target = join(pluginsDir, id);
 		let prevConfig = null;
 		const CONFIG_NAME = "config.json";
 		if (existsSync(target)) {
 			if (!opts.force)
-				fail(`插件目录已存在：${target}\n  加 --force 覆盖，或用 --name <id> 换个名字。`);
-			// 更新前备份旧版本（<dataDir>/plugin-backups/<id>-<ts>/，保留最近 3 份），
-			// 失败时自动回滚。备份与安装同 filter：不带 .git/node_modules。
+				fail(`plugin directory already exists: ${target}\n  pass --force to overwrite, or --name <id> to pick another name.`);
+			// Back up the old version before updating (<dataDir>/plugin-backups/<id>-<ts>/, keep the last 3),
+			// and roll back automatically on failure. Same filter as install: no .git/node_modules.
 			backupTs = ensurePluginBackup(pluginDataDir(opts), id, { source: rawSpec });
-			// 插件凭据/配置不因升级丢失：先取出旧 config.json，拷完新文件后原样放回
+			// Keep plugin credentials/config across upgrades: stash the old config.json and put it back after the copy
 			try {
 				prevConfig = readFileSync(join(target, CONFIG_NAME), "utf8");
 			} catch {
-				/* 无配置文件 */
+				/* no config file */
 			}
 			rmSync(target, { recursive: true, force: true });
 		}
@@ -1569,38 +1569,38 @@ async function pluginInstallCmd(argv) {
 				filter: (s) => !/(^|[\\/])(\.git|node_modules)([\\/]|$)/.test(s),
 			});
 		} catch (err) {
-			// 拷贝失败 → 有备份则自动回滚，保持旧版本可用
+			// Copy failed → roll back from backup if one exists so the old version stays usable
 			if (backupTs && restorePluginBackup(pluginDataDir(opts), id)) {
-				fail(`插件更新失败：${err?.message ?? err}\n  已自动回滚到更新前版本。`);
+				fail(`plugin update failed: ${err?.message ?? err}\n  automatically rolled back to the previous version.`);
 			}
-			fail(`插件更新失败：${err?.message ?? err}\n  （无可用备份，请重新 install --force）`);
+			fail(`plugin update failed: ${err?.message ?? err}\n  (no backup available; retry with install --force)`);
 		}
 		if (prevConfig !== null && !existsSync(join(target, CONFIG_NAME))) {
 			writeFileSync(join(target, CONFIG_NAME), prevConfig);
 		}
-		// 记录安装来源：设置面板「更新」按钮据此重跑同一条安装命令（--force 覆盖）。
+		// Record the install source: the settings "Update" button re-runs the same install command (--force overwrite).
 		try {
 			writeFileSync(
 				join(target, ".pi-source.json"),
 				JSON.stringify({ source: rawSpec }, null, 2) + "\n",
 			);
 		} catch {
-			/* 尽力而为：没有来源信息只是不显示更新按钮 */
+			/* best-effort: missing source info only hides the update button */
 		}
-		// 记录本次安装的远端 sha（git ls-remote HEAD，离线也支持本地 git 源）：
-		// 供 `pi-web-ui plugins --check-updates` 对比更新。失败静默（无 sha = 保守可更新）。
+		// Record the remote sha for this install (git ls-remote HEAD; local git sources work offline):
+		// used by `pi-web-ui plugins --check-updates`. Failures are silent (no sha = conservatively updatable).
 		try {
 			const sha = await resolveRemoteSha(rawSpec);
 			if (sha) writeFileSync(join(target, ".pi-git-sha"), sha + "\n");
 		} catch {
-			/* 尽力而为 */
+			/* best-effort */
 		}
 		console.log(
-			`✔ 已安装插件 ${id}${manifest.name && manifest.name !== id ? `（${manifest.name}）` : ""}${manifest.version ? ` v${manifest.version}` : ""}`,
+			`✔ Installed plugin ${id}${manifest.name && manifest.name !== id ? ` (${manifest.name})` : ""}${manifest.version ? ` v${manifest.version}` : ""}`,
 		);
 		if (manifest.description) console.log(`  ${manifest.description}`);
-		console.log(`  位置: ${target}`);
-		console.log(`  生效: 服务运行中刷新浏览器即可加载；未运行则下次启动生效。卸载: pi-web-ui uninstall ${id}`);
+		console.log(`  Location: ${target}`);
+		console.log(`  Takes effect: refresh the browser if the server is running; otherwise on next start. Uninstall: pi-web-ui uninstall ${id}`);
 	} finally {
 		rmSync(tmp, { recursive: true, force: true });
 	}
@@ -1614,11 +1614,11 @@ function pluginUninstallCmd(argv) {
 		return;
 	}
 	const id = positionals[0];
-	if (!PLUGIN_ID_RE.test(id)) fail(`非法插件 id: ${id}`);
+	if (!PLUGIN_ID_RE.test(id)) fail(`invalid plugin id: ${id}`);
 	const target = join(pluginDataDir(opts), "plugins", id);
-	if (!existsSync(target)) fail(`未安装插件 "${id}"（pi-web-ui plugins 查看已装列表）`);
+	if (!existsSync(target)) fail(`plugin "${id}" is not installed (pi-web-ui plugins lists installed plugins)`);
 	rmSync(target, { recursive: true, force: true });
-	console.log(`✔ 已卸载插件 ${id} —— 运行中的服务刷新浏览器后消失。`);
+	console.log(`✔ Uninstalled plugin ${id} — refresh the browser if the server is running and it will disappear.`);
 }
 
 function pluginListCmd(argv) {
@@ -1628,18 +1628,18 @@ function pluginListCmd(argv) {
 		return;
 	}
 	const dataDir = pluginDataDir(opts);
-	// --rollback <id>：回滚到最近一份更新前备份
+	// --rollback <id>: restore the most recent pre-update backup
 	if (opts.rollback) {
 		const id = String(opts.rollback);
-		if (!PLUGIN_ID_RE.test(id)) fail(`非法插件 id: ${id}`);
+		if (!PLUGIN_ID_RE.test(id)) fail(`invalid plugin id: ${id}`);
 		const target = join(dataDir, "plugins", id);
-		if (!existsSync(target)) fail(`未安装插件 "${id}"（pi-web-ui plugins 查看已装列表）`);
+		if (!existsSync(target)) fail(`plugin "${id}" is not installed (pi-web-ui plugins lists installed plugins)`);
 		const ts = restorePluginBackup(dataDir, id);
-		if (!ts) fail(`插件 "${id}" 没有更新备份（从未覆盖安装 / 备份已用完）`);
-		console.log(`✔ 已回滚插件 ${id} 到 ${ts} 的快照 —— 运行中的服务刷新浏览器后生效。`);
+		if (!ts) fail(`plugin "${id}" has no update backup (never overwritten / backups pruned)`);
+		console.log(`✔ Rolled back plugin ${id} to the ${ts} snapshot — refresh the browser if the server is running.`);
 		return;
 	}
-	// --check-updates：对比各插件记录的最后安装 sha 与远端 HEAD（git ls-remote）
+	// --check-updates: compare each plugin's last installed sha with remote HEAD (git ls-remote)
 	if (opts.checkUpdates) {
 		return checkUpdatesCmd(dataDir).then(() => {});
 	}
@@ -1649,7 +1649,7 @@ function pluginListCmd(argv) {
 	try {
 		names = readdirSync(pluginsDir).sort();
 	} catch {
-		/* 目录不存在 = 未安装任何插件 */
+		/* missing directory = no plugins installed */
 	}
 	for (const n of names) {
 		if (!PLUGIN_ID_RE.test(n)) continue;
@@ -1657,42 +1657,42 @@ function pluginListCmd(argv) {
 			const m = JSON.parse(readFileSync(join(pluginsDir, n, "manifest.json"), "utf8"));
 			rows.push(`  ${n.padEnd(24)} ${[m.name, m.version ? `v${m.version}` : "", m.description].filter(Boolean).join("  ")}`);
 		} catch {
-			continue; // 坏目录跳过
+			continue; // skip a bad directory
 		}
 	}
 	if (rows.length === 0) {
-		console.log(`尚未安装任何界面插件（目录: ${pluginsDir}）\n安装示例: pi-web-ui install owner/repo`);
+		console.log(`No UI plugins installed (directory: ${pluginsDir})\nInstall example: pi-web-ui install owner/repo`);
 		return;
 	}
-	console.log(`已安装的界面插件（${pluginsDir}）:\n${rows.join("\n")}`);
+	console.log(`Installed UI plugins (${pluginsDir}):\n${rows.join("\n")}`);
 }
 
 async function checkUpdatesCmd(dataDir) {
-	console.log("检查界面插件更新（git ls-remote 对比最近安装版本）…\n");
+	console.log("Checking UI plugin updates (git ls-remote vs last installed version)…\n");
 	let rows;
 	try {
 		rows = await checkPluginUpdates(dataDir);
 	} catch (err) {
-		fail(`更新检查失败：${err?.message ?? err}`);
+		fail(`update check failed: ${err?.message ?? err}`);
 	}
 	if (rows.length === 0) {
-		console.log(`尚未安装任何带来源记录的界面插件（目录: ${join(dataDir, "plugins")}）`);
+		console.log(`No UI plugins with a recorded source are installed (directory: ${join(dataDir, "plugins")})`);
 		return;
 	}
 	let any = false;
 	for (const r of rows) {
-		const label = r.name && r.name !== r.id ? `${r.id}（${r.name}）` : r.id;
+		const label = r.name && r.name !== r.id ? `${r.id} (${r.name})` : r.id;
 		if (r.updatable) {
-			console.log(`  🔄 ${label}${r.version ? ` v${r.version}` : ""}  可更新（已装 ${r.localSha ?? "未知"} → 远端 ${r.remoteSha}）`);
-			console.log(`     更新: pi-web-ui install ${r.source} --name ${r.id} --force`);
+			console.log(`  🔄 ${label}${r.version ? ` v${r.version}` : ""}  update available (installed ${r.localSha ?? "unknown"} → remote ${r.remoteSha})`);
+			console.log(`     Update: pi-web-ui install ${r.source} --name ${r.id} --force`);
 			any = true;
 		} else if (r.remoteSha) {
-			console.log(`  ✓ ${label}${r.version ? ` v${r.version}` : ""}  已是最新（${r.remoteSha}）`);
+			console.log(`  ✓ ${label}${r.version ? ` v${r.version}` : ""}  up to date (${r.remoteSha})`);
 		} else {
-			console.log(`  ? ${label}  ${r.error ?? "无法检查"}（来源: ${r.source}）`);
+			console.log(`  ? ${label}  ${r.error ?? "could not check"} (source: ${r.source})`);
 		}
 	}
-	if (!any) console.log("\n全部插件均为最新版本。");
+	if (!any) console.log("\nAll plugins are up to date.");
 }
 
 async function serverCmd(argv) {
@@ -1703,13 +1703,13 @@ async function serverCmd(argv) {
 	}
 	if (positionals.length === 0) {
 		console.log(HELP);
-		console.log("--- 当前服务状态 ---");
+		console.log("--- current service status ---");
 		controlService("status", opts);
 		return;
 	}
 	const action = positionals[0];
 	if (positionals.length > 1)
-		fail(`多余的参数: ${positionals.slice(1).join(" ")}`);
+		fail(`extra arguments: ${positionals.slice(1).join(" ")}`);
 	switch (action) {
 		case "shortcut": {
 			if (isWin) {
@@ -1719,7 +1719,7 @@ async function serverCmd(argv) {
 			} else if (isLinux) {
 				installLinuxShortcut(opts);
 			} else {
-				fail(`不支持的系统服务平台: ${process.platform}`);
+				fail(`unsupported system-service platform: ${process.platform}`);
 			}
 			break;
 		}
@@ -1731,7 +1731,7 @@ async function serverCmd(argv) {
 			} else if (isWin) {
 				installWindows(opts);
 			} else {
-				fail(`不支持的系统服务平台: ${process.platform}`);
+				fail(`unsupported system-service platform: ${process.platform}`);
 			}
 			break;
 		}
@@ -1743,7 +1743,7 @@ async function serverCmd(argv) {
 			} else if (isWin) {
 				uninstallWindows(opts);
 			} else {
-				fail(`不支持的系统服务平台: ${process.platform}`);
+				fail(`unsupported system-service platform: ${process.platform}`);
 			}
 			break;
 		}
@@ -1764,7 +1764,7 @@ async function serverCmd(argv) {
 			break;
 		default:
 			fail(
-				`未知操作: ${action}（install / shortcut / uninstall / start / stop / restart / status / quiesce / unquiesce）`,
+				`unknown action: ${action} (install / shortcut / uninstall / start / stop / restart / status / quiesce / unquiesce)`,
 			);
 	}
 }
@@ -1808,7 +1808,7 @@ async function main() {
 		return;
 	}
 	if (positionals.length > 0)
-		fail(`未知命令: ${positionals[0]}（--help 查看用法）`);
+		fail(`unknown command: ${positionals[0]} (--help for usage)`);
 	await startForeground(opts);
 }
 

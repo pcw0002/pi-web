@@ -1,9 +1,10 @@
 /**
- * text-sniff — 文件预览相关的纯函数：扩展名分类、内容嗅探、文本解码
- * （UTF-8 → GBK → latin1 回退）、十六进制视图、行数统计。
+ * text-sniff — pure helpers for file preview: extension classification,
+ * content sniffing, text decode (UTF-8 → GBK → latin1 fallback), hex dump,
+ * line counting.
  *
- * 全部无副作用、不碰 fs —— 便于单元测试（tests/unit/text-sniff.test.ts）。
- * 从 agent-service.ts 抽出，行为保持不变。
+ * All side-effect free and fs-free — unit-testable (tests/unit/text-sniff.test.ts).
+ * Extracted from agent-service.ts with behavior unchanged.
  */
 
 export type PreviewKind = "image" | "video" | "text" | "none";

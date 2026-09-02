@@ -95,7 +95,7 @@ async function main() {
 		bar.dispatchEvent(
 			new DragEvent("drop", { dataTransfer: dt, bubbles: true, cancelable: true }),
 		);
-	}, { name: "note.txt", text: "拖拽的文本文件 hello" });
+	}, { name: "note.txt", text: "dragged text file hello" });
 	await page.waitForSelector(".attach-chip.file", { timeout: 8000 });
 	check("drag: 📄 text chip appeared", true);
 
@@ -128,7 +128,7 @@ async function main() {
 	);
 
 	// 4) Send; the text file must inline (content visible), binary referenced.
-	await page.fill(".inputbox textarea", "看看这两个文件");
+	await page.fill(".inputbox textarea", "look at these two files");
 	await page.keyboard.press("Enter");
 	await page.waitForSelector(".attachcard", { timeout: 20000 });
 	await page.waitForTimeout(500);
@@ -145,7 +145,7 @@ async function main() {
 		.trim();
 	check(
 		`text card inline: "${firstName}" / ${firstMode} / contains content`,
-		firstName === "note.txt" && inlineContent.includes("拖拽的文本文件"),
+		firstName === "note.txt" && inlineContent.includes("dragged text file"),
 	);
 
 	const second = page.locator(".attachcard").nth(1);
@@ -153,7 +153,7 @@ async function main() {
 	const secondMode = (await second.locator(".attachcard-mode").textContent()).trim();
 	check(
 		`binary card reference: "${secondName}" / ${secondMode}`,
-		secondName === "data.bin" && /引用|reference/i.test(secondMode),
+		secondName === "data.bin" && /reference/i.test(secondMode),
 	);
 
 	check("no console errors", consoleErrors.length === 0);

@@ -85,7 +85,7 @@ async function sendPrompt(page, text) {
 	await page.keyboard.press("Enter");
 }
 
-/** Wait for the last ask_user_question toolcall to reach 完成. */
+/** Wait for the last ask_user_question toolcall to reach Done. */
 async function waitToolDone(page, timeout = 180_000) {
 	const tc = page.locator(
 		'.toolcall:has(.toolcall-name:text-is("ask_user_question"))',
@@ -103,7 +103,7 @@ async function waitToolDone(page, timeout = 180_000) {
 			.locator(".toolcall-status")
 			.textContent()
 			.catch(() => "");
-		if (status === "完成") return true;
+		if (status.includes("Done")) return true;
 		await sleep(500);
 	}
 	return false;
@@ -133,7 +133,7 @@ async function main() {
 	console.log("round 1: answering the questionnaire…");
 	await sendPrompt(
 		page,
-		"请立即调用 ask_user_question 工具问我一个问题：「测试问题：1+1 等于几？」并给出两个选项：「等于 2」和「等于 3」。调用后等待我的回答，不要做其他事。",
+		"Immediately call ask_user_question to ask me: \"Test: what is 1+1?\" with two options: \"equals 2\" and \"equals 3\". Then wait for my answer and do nothing else.",
 	);
 
 	// The inline panel must appear above the input (styling + options).
@@ -196,7 +196,7 @@ async function main() {
 	console.log("round 2: dismissing with Escape…");
 	await sendPrompt(
 		page,
-		"请再次调用 ask_user_question 工具问我一个问题（不要用文字回复，必须调用工具）：「测试问题：继续吗？」给出两个选项：「继续」和「停下」。调用后等待我的回答，不要做其他事。",
+		"Call ask_user_question again (do not reply in text, you must call the tool): \"Test: continue?\" with two options: \"continue\" and \"stop\". Then wait for my answer and do nothing else.",
 	);
 	await page.waitForSelector(".dialog-inline", {
 		state: "visible",

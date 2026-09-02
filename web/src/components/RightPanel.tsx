@@ -50,7 +50,7 @@ export const RightPanel = memo(function RightPanel({
 }: RightPanelProps) {
 	const t = useT();
 	const [currentPath, setCurrentPath] = useState<string>("");
-	// 点击放大的 widget（居中浮层展示完整宽度输出）。
+	// Widget clicked to expand (centered overlay showing the full-width output).
 	const [expandedWidget, setExpandedWidget] = useState<string | null>(null);
 	const [loading, setLoading] = useState(false);
 

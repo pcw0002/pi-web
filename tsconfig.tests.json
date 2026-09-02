@@ -11,5 +11,5 @@
     "noEmit": true,
     "types": ["node", "vitest/globals"]
   },
-  "include": ["tests/unit/**/*.ts", "server/**/*.ts", "web/src/skill-block.ts"]
+	"include": ["tests/unit/**/*.ts", "server/**/*.ts", "web/src/skill-block.ts", "web/src/review-range.ts"]
 }

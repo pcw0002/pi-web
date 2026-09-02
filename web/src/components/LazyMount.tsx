@@ -1,25 +1,27 @@
 import { memo, useLayoutEffect, useRef, type ReactNode, type RefObject } from "react";
 
 interface LazyMountProps {
-	/** 消息 id——占位符带 data-msg-id，问题导航 / 搜索跳转的查询不受影响。 */
+	/** Message id — placeholders keep data-msg-id so question-nav / search-jump queries still work. */
 	id: string;
-	/** false = 渲染固定高度占位符；true = 渲染真实内容。 */
+	/** false = render a fixed-height placeholder; true = render real content. */
 	show: boolean;
-	/** 占位高度（上次实测值或角色估算值）。 */
+	/** Placeholder height (last measured value or a role estimate). */
 	height: number;
-	/** 滚动容器（.messages），用于显示瞬间的 scrollTop 补偿。 */
+	/** Scroll container (.messages), used for scrollTop compensation at the moment of show. */
 	containerRef: RefObject<HTMLDivElement | null>;
-	/** 真实内容挂载后回报实测高度（父级写入 heights 缓存）。 */
+	/** Report measured height after real content mounts (parent writes the heights cache). */
 	onMeasured?: (id: string, height: number) => void;
-	/** 外层包裹元素 ref 注册（父级 sweep 需要测量所有受管元素）。 */
+	/** Outer wrapper element ref (parent sweep needs to measure every managed element). */
 	lazyRef?: (el: HTMLDivElement | null) => void;
 	children: ReactNode;
 }
 
 /**
- * 惰性挂载包装：隐藏时渲染一个保留 data-msg-id 的等高占位 div；显示瞬间在
- * layout effect（提交后、绘制前）里实测真实高度，若元素完全位于视口上方，
- * 按「真实 − 占位」差值补偿 scrollTop，抵消向上滚动时的视觉跳动。
+ * Lazy-mount wrapper: while hidden, render an equal-height placeholder div that
+ * keeps data-msg-id; at the moment of show, a layout effect (after commit,
+ * before paint) measures the real height and, if the element sits entirely
+ * above the viewport, compensates scrollTop by (real − placeholder) to cancel
+ * the visual jump when scrolling upward.
  */
 export const LazyMount = memo(function LazyMount({
 	id,
@@ -31,7 +33,7 @@ export const LazyMount = memo(function LazyMount({
 	children,
 }: LazyMountProps) {
 	const innerRef = useRef<HTMLDivElement>(null);
-	// 上一帧是否处于显示状态（null = 刚挂载，不做补偿）
+	// Whether the previous frame was shown (null = just mounted, skip compensation)
 	const wasShown = useRef<boolean | null>(null);
 
 	useLayoutEffect(() => {
@@ -50,11 +52,11 @@ export const LazyMount = memo(function LazyMount({
 				wrap &&
 				wrap.getBoundingClientRect().bottom <= root.getBoundingClientRect().top
 			) {
-				// 内容整体在视口上方：占位换真身导致下方内容位移，回滚之。
+				// Content sits entirely above the viewport: swapping placeholder for real content shifts everything below — roll it back.
 				root.scrollTop += delta;
 			}
 		}
-		// 仅在显隐切换时测量；height/onMeasured 的变化不重跑
+		// Measure only on show/hide transitions; height/onMeasured changes must not re-run
 		// eslint-disable-next-line react-hooks/exhaustive-deps
 	}, [show]);
 

@@ -1,0 +1,10 @@
+{
+	"name": "@local-review/mcp",
+	"version": "0.0.0",
+	"private": true,
+	"type": "module",
+	"description": "MCP tool schemas for Local Review. Wrap ReviewStore; no UI.",
+	"exports": {
+		".": "./src/index.ts"
+	}
+}

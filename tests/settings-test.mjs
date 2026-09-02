@@ -120,27 +120,27 @@ try {
 	check("get_settings echoes state", st1.settings.promptMode === "append");
 
 	// append prompt, then save it as a preset
-	c.send({ type: "set_settings", promptMode: "append", customSystemPrompt: "你是一个测试助手。" });
-	const st2 = await c.waitFor("settings_state", 8000, (m) => m.settings.customSystemPrompt === "你是一个测试助手。");
-	check("append prompt persisted", st2.settings.customSystemPrompt === "你是一个测试助手。");
+	c.send({ type: "set_settings", promptMode: "append", customSystemPrompt: "You are a test assistant." });
+	const st2 = await c.waitFor("settings_state", 8000, (m) => m.settings.customSystemPrompt === "You are a test assistant.");
+	check("append prompt persisted", st2.settings.customSystemPrompt === "You are a test assistant.");
 
-	c.send({ type: "save_preset", name: "测试预设" });
-	const st6 = await c.waitFor("settings_state", 8000, (m) => m.settings.presets.some((p) => p.name === "测试预设"));
-	check("preset saved", st6.settings.presets.some((p) => p.name === "测试预设"));
+	c.send({ type: "save_preset", name: "test-preset" });
+	const st6 = await c.waitFor("settings_state", 8000, (m) => m.settings.presets.some((p) => p.name === "test-preset"));
+	check("preset saved", st6.settings.presets.some((p) => p.name === "test-preset"));
 
 	// replace prompt
-	c.send({ type: "set_settings", promptMode: "replace", customSystemPrompt: "你是替换提示词。" });
+	c.send({ type: "set_settings", promptMode: "replace", customSystemPrompt: "You are a replacement prompt." });
 	const st2b = await c.waitFor("settings_state", 8000, (m) => m.settings.promptMode === "replace");
 	check("promptMode replace persisted", st2b.settings.promptMode === "replace");
 	c.send({ type: "set_settings", promptMode: "append" });
 	await c.waitFor("settings_state", 8000, (m) => m.settings.promptMode === "append");
 
-	// terminal tools toggle：默认开 → 关 → 重连后仍记住；预设捕获该开关
+	// terminal tools toggle: default on → off → still remembered after reconnect; presets capture this switch
 	check("terminalToolsEnabled defaults on", st0.settings.terminalToolsEnabled === true);
 	c.send({ type: "set_settings", terminalToolsEnabled: false });
 	const stT = await c.waitFor("settings_state", 8000, (m) => m.settings.terminalToolsEnabled === false);
 	check("terminalToolsEnabled off persisted", stT.settings.terminalToolsEnabled === false);
-	// 终端接管 bash：开关 + 阈值往返（回归：dispatch 曾漏转发导致点击无效）
+	// terminal-backed bash: switch + threshold round-trip (regression: dispatch used to drop the forward so clicks did nothing)
 	check("terminalBash defaults off", st0.settings.terminalBash === false);
 	check("terminalBashIdleMs defaults 15000", st0.settings.terminalBashIdleMs === 15000);
 	c.send({ type: "set_settings", terminalBash: true, terminalBashIdleMs: 5000 });
@@ -149,7 +149,7 @@ try {
 	check("terminalBashIdleMs round-trips", stTB.settings.terminalBashIdleMs === 5000);
 	c.send({ type: "set_settings", terminalBash: false });
 	await c.waitFor("settings_state", 8000, (m) => m.settings.promptMode === "append");
-	// 思考折叠开关：默认关（折叠）→ 开 → 再关（纯 UI 偏好，持久化即可）
+	// thinking-wrap toggle: default off (folded) → on → off again (pure UI pref, persist is enough)
 	check("thinkingWrap defaults off", st0.settings.thinkingWrap === false);
 	c.send({ type: "set_settings", thinkingWrap: false });
 	const stTW = await c.waitFor(
@@ -191,21 +191,21 @@ try {
 		console.log("  (no extensions loaded — skipping)");
 	}
 
-	// apply preset → restores append/你好
-	c.send({ type: "set_settings", customSystemPrompt: "临时内容" });
-	await c.waitFor("settings_state", 8000, (m) => m.settings.customSystemPrompt === "临时内容");
-	c.send({ type: "apply_preset", name: "测试预设" });
-	const st7 = await c.waitFor("settings_state", 8000, (m) => m.settings.customSystemPrompt === "你是一个测试助手。");
-	check("preset applied (prompt restored)", st7.settings.customSystemPrompt === "你是一个测试助手。");
+	// apply preset → restores append/the saved prompt
+	c.send({ type: "set_settings", customSystemPrompt: "temporary content" });
+	await c.waitFor("settings_state", 8000, (m) => m.settings.customSystemPrompt === "temporary content");
+	c.send({ type: "apply_preset", name: "test-preset" });
+	const st7 = await c.waitFor("settings_state", 8000, (m) => m.settings.customSystemPrompt === "You are a test assistant.");
+	check("preset applied (prompt restored)", st7.settings.customSystemPrompt === "You are a test assistant.");
 	check("preset applied (mode restored)", st7.settings.promptMode === "append");
-	// 预设保存时开关是开 → 应用预设把它恢复为 true（验证预设捕获该开关）
+	// when the preset was saved the switch was on → applying the preset restores it to true (preset captures the switch)
 	check("preset applied (terminal toggle restored to captured value)", st7.settings.terminalToolsEnabled === true);
 
-	c.send({ type: "delete_preset", name: "测试预设" });
-	const st8 = await c.waitFor("settings_state", 8000, (m) => !m.settings.presets.some((p) => p.name === "测试预设"));
-	check("preset deleted", !st8.settings.presets.some((p) => p.name === "测试预设"));
+	c.send({ type: "delete_preset", name: "test-preset" });
+	const st8 = await c.waitFor("settings_state", 8000, (m) => !m.settings.presets.some((p) => p.name === "test-preset"));
+	check("preset deleted", !st8.settings.presets.some((p) => p.name === "test-preset"));
 
-	// persistence across reconnect：重新关掉终端工具再断线，重连后应记住
+	// persistence across reconnect: turn terminal tools off again, disconnect, should still be remembered
 	c.send({ type: "set_settings", terminalToolsEnabled: false });
 	await c.waitFor("settings_state", 8000, (m) => m.settings.terminalToolsEnabled === false);
 	c.ws.close();
@@ -215,13 +215,13 @@ try {
 	await c.waitFor("ready");
 	await c.waitFor(["snapshot", "snapshot_delta"]);
 	const st9 = await c.waitFor("settings_state");
-	check("prompt survives reconnect", st9.settings.customSystemPrompt === "你是一个测试助手。");
+	check("prompt survives reconnect", st9.settings.customSystemPrompt === "You are a test assistant.");
 	check("terminalToolsEnabled survives reconnect (off)", st9.settings.terminalToolsEnabled === false);
-	// 恢复默认开，避免影响后续断言
+	// restore the default-on so later assertions are not affected
 	c.send({ type: "set_settings", terminalToolsEnabled: true });
 	await c.waitFor("settings_state", 8000, (m) => m.settings.terminalToolsEnabled === true);
 
-	// extensions_reload：外部变更（如终端里 pi remove 完成）后重发现扩展
+	// extensions_reload: rediscover extensions after an external change (e.g. pi remove finished in a terminal)
 	c.send({ type: "extensions_reload" });
 	await c.waitFor("settings_state", 15000);
 	check("extensions_reload re-pushes settings", true);

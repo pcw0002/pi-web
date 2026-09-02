@@ -15,7 +15,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
-// fileURLToPath: URL.pathname 在 Windows 下是 /E:/... 形式，直接当 cwd 会失败
+// fileURLToPath: URL.pathname on Windows is /E:/...; using it as cwd directly fails
 const REPO_ROOT = fileURLToPath(new globalThis.URL("../", import.meta.url));
 
 /* eslint-env node */
@@ -96,7 +96,7 @@ async function waitUp() {
 
 	console.log("Starting goal wizard…");
 	ws.send(
-		JSON.stringify({ type: "start_goal_wizard", text: "写一个打开即用的文件去重小工具", maxRounds: 3 }),
+		JSON.stringify({ type: "start_goal_wizard", text: "Write a ready-to-use file-dedup tool", maxRounds: 3 }),
 	);
 
 	let sawWizardActive = false;
@@ -123,13 +123,13 @@ async function waitUp() {
 			console.error(`[d] Q${answered} (id=${msg.id}) → ${(msg.args?.[0] || "?").toString().slice(0, 50)}`);
 			// Answer multiple-choice by picking the first option; else free text.
 			const opts = msg.args?.[0];
-			const val = Array.isArray(opts) && opts.length > 0 ? opts[0] : "都可以，你决定";
+			const val = Array.isArray(opts) && opts.length > 0 ? opts[0] : "whatever you decide";
 			ws.send(JSON.stringify({ type: "dialog_response", id: msg.id, value: val }));
 		}
 		if (msg.type === "goal_status" && msg.status.goal && !setGoalSeen) {
 			setGoalSeen = msg.status.goal;
 			console.error(`[d] goal set: ${msg.status.goal.slice(0, 60)}`);
-			// After goal set, the wizard should AUTO-KICK generation (no "开始吧").
+			// After goal set, the wizard should AUTO-KICK generation (no "go ahead").
 			// Wait a few seconds for the kick-off user message (# it's the marker
 			// text injected by startGoalWizard) to appear in a snapshot.
 			try {
@@ -137,7 +137,7 @@ async function waitUp() {
 					(m) =>
 						m.type === "snapshot" &&
 						m.state.messages.some((mm) =>
-							(mm.content?.[0]?.text ?? "").startsWith("【目标已设定】"),
+							(mm.content?.[0]?.text ?? "").startsWith("[Goal set]"),
 						),
 					"auto-generate kick-off user message",
 					30000,
@@ -154,7 +154,7 @@ async function waitUp() {
 
 	check("wizard went active (asked questions)", sawWizardActive, `answered=${answered}`);
 	check("refined goal auto-set", Boolean(setGoalSeen), setGoalSeen || "none");
-	check("auto-generated after survey (no manual 开始吧)", kickOffSeen);
+	check("auto-generated after survey (no manual go-ahead)", kickOffSeen);
 	if (!setGoalSeen) {
 		const g = inbox.find((m) => m.type === "goal_status");
 		console.error("[d] last goal_status:", JSON.stringify(g));

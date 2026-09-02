@@ -15,7 +15,7 @@ process.env.PORT = String(PORT);
 process.env.PI_WEB_CWD = workdir;
 process.env.PI_WEB_DATA_DIR = dataDir;
 
-// realpathSync: fnm multishell shim 路径可能失效；fileURLToPath: URL.pathname 在 Windows 下非法
+// realpathSync: fnm multishell shim path may be stale; fileURLToPath: URL.pathname is illegal on Windows
 const NODE = realpathSync(process.execPath);
 const REPO = fileURLToPath(new globalThis.URL("../", import.meta.url));
 
@@ -167,7 +167,7 @@ async function main() {
 	// -- folder attachment: a directory is accepted (not skipped as a non-file) --
 	// Full end-to-end (the <folder path> card in the transcript) requires a real
 	// model turn; here we verify the server takes the folder branch instead of
-	// the old "跳过非文件附件" skip path, and that no path error is emitted.
+	// the old "skip non-file attachments" skip path, and that no path error is emitted.
 	{
 		const { mkdirSync } = await import("node:fs");
 		mkdirSync(join(workdir, "subdir"), { recursive: true });
@@ -180,13 +180,13 @@ async function main() {
 		check(
 			"folder not skipped as a non-file attachment",
 			!notices.some(
-				(t) => t.includes("跳过非文件附件") && t.includes("subdir"),
+				(t) => t.includes("Skipping non-file attachment") && t.includes("subdir"),
 			),
 		);
 		check(
 			"no attachment error for the folder",
 			!notices.some(
-				(t) => t.includes("附件") && t.includes("subdir") && t.includes("失败"),
+				(t) => t.includes("attachment") && t.includes("subdir") && t.includes("Failed"),
 			),
 		);
 	}
@@ -221,7 +221,7 @@ async function main() {
 					timestamp: "2026-08-04T00:00:01.000Z",
 					message: {
 						role: "user",
-						content: [{ type: "text", text: "TUI 会话标题" }],
+						content: [{ type: "text", text: "TUI session title" }],
 						timestamp: 1722700801000,
 					},
 				}),
@@ -241,7 +241,7 @@ async function main() {
 		check(
 			"persisted session appears in the conversation list",
 			sessionsReply?.some(
-				(s) => s.path === tuiFile && s.firstMessage === "TUI 会话标题",
+				(s) => s.path === tuiFile && s.firstMessage === "TUI session title",
 			) ?? false,
 		);
 	}
@@ -352,7 +352,7 @@ async function main() {
 		rows: 12,
 	});
 	await sleep(500);
-	check("run_command enforces terminal limit", notices.some((text) => text.includes("终端数量已达上限")));
+	check("run_command enforces terminal limit", notices.some((text) => text.includes("Terminal limit reached")));
 	for (const id of capIds) send({ type: "terminal_kill", terminalId: id });
 
 	// -- key encoding (pure + byte-exact) ------------------------------------
@@ -394,7 +394,7 @@ async function main() {
 		await sleep(400);
 		check(
 			"terminal_create + run_command both reject an invalid id",
-			notices.slice(before).filter((n) => n.includes("终端名称无效")).length >= 2,
+			notices.slice(before).filter((n) => n.includes("Invalid terminal name")).length >= 2,
 		);
 	}
 
@@ -425,7 +425,7 @@ async function main() {
 		await sleep(400);
 		check(
 			"run_command of an exited id at the cap is rejected",
-			notices.slice(before).some((n) => n.includes("终端数量已达上限")),
+			notices.slice(before).some((n) => n.includes("Terminal limit reached")),
 		);
 		for (const id of histIds) send({ type: "terminal_kill", terminalId: id });
 		send({ type: "terminal_kill", terminalId: "hist-fill" });

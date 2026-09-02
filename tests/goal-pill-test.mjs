@@ -13,7 +13,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
-// fileURLToPath: URL.pathname 在 Windows 下是 /E:/... 形式，直接当 cwd 会失败
+// fileURLToPath: URL.pathname on Windows is /E:/...; using it as cwd directly fails
 const REPO_ROOT = fileURLToPath(new globalThis.URL("../", import.meta.url));
 
 /* eslint-env node */
@@ -78,8 +78,8 @@ async function run() {
 	check("clicking pill opens editor", true);
 
 	// 3. Type a goal, then open the model dropdown; assert dd-up + upward anchored.
-	await page.locator(".goalbar-input").fill("做一个小工具");
-	const modelOpt = page.locator(".goalbar-opt").first(); // "审查模型" dropdown trigger
+	await page.locator(".goalbar-input").fill("Build a small tool");
+	const modelOpt = page.locator(".goalbar-opt").first(); // "Review model" dropdown trigger
 	await modelOpt.click();
 	await page.waitForSelector(".dd-menu", { timeout: 8000 });
 	const ddUp = await page

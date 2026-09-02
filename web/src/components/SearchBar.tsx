@@ -14,26 +14,26 @@ import { buildSearchHits } from "../search-text";
 import { useT } from "../i18n";
 
 /**
- * 会话内搜索栏（Ctrl+F / Cmd+F，浏览器 find 风格）。
+ * In-conversation search bar (Ctrl+F / Cmd+F, browser-find style).
  *
- * - 命中索引来自 search-text.ts 纯函数（消息级文本拼接）；
- * - 内联高亮走 **CSS Custom Highlight API**（CSS.highlights + ::highlight()）：
- *   直接在 DOM 文本节点上建 Range，不侵入 react-markdown 渲染树；
- *   不支持的浏览器自动降级为只跳转不内联高亮（消息仍有 flash 描边）；
- * - 跳转前经 onEnsureExpanded 同步展开折叠的旧消息，保证命中内容在 DOM 里。
+ * - Hit index comes from the search-text.ts pure functions (per-message text join);
+ * - Inline highlight uses the **CSS Custom Highlight API** (CSS.highlights + ::highlight()):
+ *   Ranges are built directly on DOM text nodes, without touching the react-markdown tree;
+ *   unsupported browsers fall back to jump-only (no inline highlight; the message still flashes);
+ * - Before jumping, onEnsureExpanded synchronously expands collapsed old messages so the hit is in the DOM.
  */
 
 interface SearchBarProps {
-	/** 消息滚动容器（.messages）——Range 收集与滚动都在其子树内。 */
+	/** Message scroll container (.messages) — Range collection and scrolling both happen in its subtree. */
 	containerRef: RefObject<HTMLDivElement | null>;
 	messages: readonly UiMessage[];
 	open: boolean;
 	onClose: () => void;
-	/** 跳转目标若是折叠的旧消息，先同步展开（父组件 flushSync）。 */
+	/** If the jump target is a collapsed old message, expand it first (parent flushSync). */
 	onEnsureExpanded: (messageId: string) => void;
 }
 
-/** 在容器子树里收集所有包含 query 的文本区间（大小写不敏感，节点内匹配）。 */
+/** Collect every text range in the container subtree that contains query (case-insensitive, in-node match). */
 function collectRanges(
 	root: HTMLElement,
 	query: string,
@@ -45,7 +45,7 @@ function collectRanges(
 	const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
 		acceptNode(node) {
 			const el = node.parentElement;
-			// 跳过搜索栏自身，避免高亮输入框里的查询文本
+			// Skip the search bar itself so the query text in the input is not highlighted.
 			if (!el || el.closest(".search-bar")) return NodeFilter.FILTER_REJECT;
 			return (node.textContent ?? "").toLowerCase().includes(needle)
 				? NodeFilter.FILTER_ACCEPT
@@ -79,7 +79,7 @@ function setHighlight(name: string, ranges: Range[]) {
 		css.highlights.delete(name);
 		return;
 	}
-	// Highlight 构造器在旧 lib.dom 里没有类型，运行时按特性检测使用。
+	// Highlight constructor is untyped in older lib.dom; feature-detect at runtime.
 	const Ctor = (
 		window as unknown as { Highlight?: new (...r: Range[]) => unknown }
 	).Highlight;
@@ -99,27 +99,27 @@ export function SearchBar({
 	const [active, setActive] = useState(0);
 	const deferredQuery = useDeferredValue(query);
 
-	// 命中列表：随消息集或查询变化重算（useMemo 保持引用稳定）
+	// Hit list: recompute when the message set or query changes (useMemo keeps the reference stable)
 	const q = open ? deferredQuery.trim() : "";
 	const hits = useMemo(
 		() => (open ? buildSearchHits(messages, q) : []),
-		// eslint-disable-next-line react-hooks/exhaustive-deps -- messages 数组引用稳定（服务端缓存），q/open 为原始值
+		// eslint-disable-next-line react-hooks/exhaustive-deps -- messages array ref is stable (server cache); q/open are primitives
 		[messages, q, open],
 	);
-	// refs 镜像最新值，供 rAF 回调读取而不重建 effect
+	// refs mirror the latest values so rAF callbacks can read them without rebuilding the effect
 	const hitsRef = useRef(hits);
 	hitsRef.current = hits;
 	const activeRef = useRef(active);
 	activeRef.current = active;
 
-	// 打开时聚焦输入框；若消息区有选中文本则预填
+	// Focus the input on open; if the message pane has a selection, prefill from it
 	useEffect(() => {
 		if (!open) return;
 		setActive(0);
 		requestAnimationFrame(() => inputRef.current?.select());
 	}, [open]);
 
-	// 打开期间拦截 Esc 关闭
+	// While open, intercept Esc to close
 	useEffect(() => {
 		if (!open) return;
 		const onKey = (e: KeyboardEvent) => {
@@ -133,7 +133,7 @@ export function SearchBar({
 		return () => window.removeEventListener("keydown", onKey, true);
 	}, [open, onClose]);
 
-	// 关闭/卸载时清理高亮
+	// Clear highlights on close / unmount
 	useEffect(() => {
 		if (!open) {
 			setHighlight("msg-search", []);
@@ -154,13 +154,13 @@ export function SearchBar({
 			);
 			if (!el) return;
 			el.classList.remove("msg-flash");
-			void el.offsetWidth; // 重启动画
+			void el.offsetWidth; // restart the animation
 			el.classList.add("msg-flash");
 		},
 		[containerRef],
 	);
 
-	// 高亮 + 滚动到当前命中。DOM 可能刚因展开而更新 —— rAF 后再收集。
+	// Highlight + scroll to the current hit. The DOM may have just updated from an expand — collect after rAF.
 	useLayoutEffect(() => {
 		if (!open || !q) return;
 		const wrap = containerRef.current;
@@ -182,7 +182,7 @@ export function SearchBar({
 					wrap.querySelector(`[data-msg-id="${hit.messageId}"]`);
 				startEl?.scrollIntoView({ block: "center" });
 			} else {
-				// 命中在索引里有、DOM 里没有（如流式更新导致节点重建）——退回消息级跳转
+				// Hit exists in the index but not in the DOM (e.g. streaming rebuilt the node) — fall back to message-level jump
 				flashMsg(hit.messageId);
 			}
 		});
@@ -198,7 +198,7 @@ export function SearchBar({
 			if (list.length === 0) return;
 			const next = (activeRef.current + dir + list.length) % list.length;
 			setActive(next);
-			// 折叠的旧消息先同步展开，下一轮 layout effect 才能在 DOM 中找到它
+			// Expand collapsed old messages first so the next layout effect can find them in the DOM
 			onEnsureExpanded(list[next].messageId);
 		},
 		[onEnsureExpanded],

@@ -1,32 +1,34 @@
 /**
- * model-admin — 模型/服务商配置管理，从 agent-service.ts 抽出。
+ * model-admin — model / provider config management, extracted from agent-service.ts.
  *
- * 职责：auth.json 的 provider api-key 存取（set/clear）、models.json 读写
- * （listModelsConfig/saveModelConfig/deleteModelConfig）、自定义服务商「自动获取
- * 模型列表」（fetch_models：服务端探测 OpenAI 兼容 /models 端点，绕开 CORS；
- * anthropic/google 鉴权头各不同；裸 /models 404 回退 /v1/models）与已保存供应商
- * 的一键刷新（refresh_provider_models，凭据不出浏览器）。改动后热更新 runtime
- * （refresh/setRuntimeApiKey）并推 models/models_config。
+ * Owns: auth.json provider api-key get/set/clear, models.json CRUD
+ * (listModelsConfig / saveModelConfig / deleteModelConfig), "fetch model list"
+ * for custom providers (fetch_models: the server probes the OpenAI-compatible
+ * /models endpoint, bypassing CORS; anthropic/google auth headers differ;
+ * a bare /models 404 falls back to /v1/models) and one-click refresh of a
+ * saved provider (refresh_provider_models, credentials never leave the
+ * server). After a change, hot-refresh the runtime (refresh / setRuntimeApiKey)
+ * and push models / models_config.
  *
- * 经 ModelAdminHost 与 ClientSession 解耦（同 settings/goal/slash 服务模式）。
- * UI 文案直接中文（服务端 notice 约定）。apiKey/headers 绝不下发浏览器。
+ * Decoupled from ClientSession via ModelAdminHost (same pattern as settings/goal/slash).
+ * Server notices are English. apiKey/headers are never sent to the browser.
  */
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import type { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import type { ServerMessage, UiModelConfigEntry, UiProviderConfig } from "./protocol.js";
 
-/** ClientSession 提供给本服务的宿主能力（窄接口）。 */
+/** Host capabilities ClientSession provides to this service (narrow interface). */
 export interface ModelAdminHost {
 	agentDir: string;
 	emit: (msg: ServerMessage) => void;
 	flushSnapshot: () => void;
 	isDisposed: () => boolean;
-	/** 共享 ModelRuntime（所有对话共用），改动后需 refresh/热更新。 */
+	/** Shared ModelRuntime (one for all conversations); must refresh / hot-update after changes. */
 	modelRuntime: () => ModelRuntime;
-	/** auth/models 变更后 pi 配置检测缓存失效（piConfigured 可能翻转）。 */
+	/** Invalidate the pi-config detection cache after auth/models change (piConfigured may flip). */
 	invalidatePiConfig: () => void;
-	/** 变更后重推顶栏模型下拉。 */
+	/** Re-push the top-bar model dropdown after a change. */
 	pushModels: () => Promise<void>;
 }
 
@@ -158,11 +160,11 @@ export class ModelAdminService {
 	async setProviderApiKey(provider: string, apiKey: string): Promise<void> {
 		const key = apiKey.trim();
 		if (!provider.trim()) {
-			this.host.emit({ type: "notice", level: "error", text: "请填写服务商 ID" });
+			this.host.emit({ type: "notice", level: "error", text: "Enter a provider ID" });
 			return;
 		}
 		if (!key) {
-			this.host.emit({ type: "notice", level: "error", text: "请填写 API 密钥" });
+			this.host.emit({ type: "notice", level: "error", text: "Enter an API key" });
 			return;
 		}
 		try {
@@ -190,7 +192,7 @@ export class ModelAdminService {
 			this.host.emit({
 				type: "notice",
 				level: "info",
-				text: `✅ 已保存 ${provider.trim()} 的 API 密钥并刷新模型列表`,
+				text: `Saved API key for ${provider.trim()} and refreshed the model list`,
 			});
 			await this.host.pushModels();
 			await this.listProviders();
@@ -198,7 +200,7 @@ export class ModelAdminService {
 			this.host.emit({
 				type: "notice",
 				level: "error",
-				text: `保存 API 密钥失败：${(err as Error).message}`,
+				text: `Failed to save API key: ${(err as Error).message}`,
 			});
 		}
 		this.host.flushSnapshot();
@@ -214,7 +216,7 @@ export class ModelAdminService {
 	async clearProviderApiKey(provider: string): Promise<void> {
 		const pid = provider.trim();
 		if (!pid) {
-			this.host.emit({ type: "notice", level: "error", text: "请填写服务商 ID" });
+			this.host.emit({ type: "notice", level: "error", text: "Enter a provider ID" });
 			return;
 		}
 		try {
@@ -233,7 +235,7 @@ export class ModelAdminService {
 				this.host.emit({
 					type: "notice",
 					level: "info",
-					text: `${pid} 没有已保存的密钥`,
+					text: `${pid} has no saved API key`,
 				});
 				return;
 			}
@@ -248,7 +250,7 @@ export class ModelAdminService {
 			this.host.emit({
 				type: "notice",
 				level: "info",
-				text: `🗑  已清除 ${pid} 的密钥，该服务商回到未配置状态`,
+				text: `Cleared the saved key for ${pid}; provider is unconfigured`,
 			});
 			await this.host.pushModels();
 			await this.listProviders();
@@ -256,7 +258,7 @@ export class ModelAdminService {
 			this.host.emit({
 				type: "notice",
 				level: "error",
-				text: `清除密钥失败：${(err as Error).message}`,
+				text: `Failed to clear API key: ${(err as Error).message}`,
 			});
 		}
 		this.host.flushSnapshot();
@@ -276,17 +278,17 @@ export class ModelAdminService {
 			this.host.emit({ type: "clone_provider_result", reqId, ok: false, error });
 		try {
 			if (!pid) {
-				fail("请填写服务商 ID");
+				fail("Enter a provider ID");
 				return;
 			}
 			const mr = this.host.modelRuntime();
 			const p = mr.getProvider(pid);
 			if (!p) {
-				fail(`供应商 ${pid} 不存在`);
+				fail(`Provider ${pid} does not exist`);
 				return;
 			}
 			if (!p.baseUrl) {
-				fail(`${pid} 没有 baseUrl（OAuth/环境变量型供应商），无法复制为自定义服务商`);
+				fail(`${pid} has no baseUrl (OAuth/env provider) and cannot be cloned as custom`);
 				return;
 			}
 			// Map runtime models → models.json rows; dynamic providers ship an
@@ -316,10 +318,10 @@ export class ModelAdminService {
 				models = readModels();
 			}
 			if (models.length === 0) {
-				fail(`${pid} 的模型列表为空，无法复制（请稍后重试）`);
+				fail(`${pid} has an empty model list, cannot clone (try again later)`);
 				return;
 			}
-			// models.json 的 api 是 provider 级：取占比最高的 api，只复制该 api 的模型。
+			// models.json api is provider-level: take the most common api and copy only that api's models.
 			const counts = new Map<string, number>();
 			for (const m of models) counts.set(m.api, (counts.get(m.api) ?? 0) + 1);
 			let api = models[0].api;
@@ -343,11 +345,11 @@ export class ModelAdminService {
 			this.host.emit({
 				type: "notice",
 				level: "info",
-				text: `📋 已复制 ${pid} → ${newId}（${kept.length} 个模型），请填入新的 API 密钥后保存`,
+				text: `Copied ${pid} → ${newId} (${kept.length} models). Enter a new API key and save.`,
 			});
 			this.host.emit({ type: "clone_provider_result", reqId, ok: true, config });
 		} catch (err) {
-			fail(`复制服务商失败：${(err as Error).message}`);
+			fail(`Failed to clone provider: ${(err as Error).message}`);
 		}
 		this.host.flushSnapshot();
 	}
@@ -375,7 +377,7 @@ export class ModelAdminService {
 			this.host.emit({
 				type: "notice",
 				level: "error",
-				text: `获取服务商列表失败：${(err as Error).message}`,
+				text: `Failed to list providers: ${(err as Error).message}`,
 			});
 			return;
 		}
@@ -383,7 +385,7 @@ export class ModelAdminService {
 			this.host.emit({
 				type: "notice",
 				level: "warning",
-				text: "服务商列表为空——pi 运行时未注册任何提供商",
+				text: "Provider list is empty — pi runtime has no providers registered",
 			});
 		}
 		this.host.emit({ type: "providers_status", providers });
@@ -604,15 +606,15 @@ static async probeModelsEndpoint(
 		extraHeaders?: Record<string, string>,
 	): Promise<UiModelConfigEntry[]> {
 		const base = (baseUrl ?? "").trim().replace(/\/+$/, "");
-		if (!base) throw new Error("请先填写 baseUrl");
+		if (!base) throw new Error("Enter a baseUrl first");
 		let url: URL;
 		try {
 			url = new URL(base);
 		} catch {
-			throw new Error(`baseUrl 无效：${base}`);
+			throw new Error(`Invalid baseUrl: ${base}`);
 		}
 		if (url.protocol !== "http:" && url.protocol !== "https:") {
-			throw new Error("baseUrl 仅支持 http/https");
+			throw new Error("baseUrl must be http or https");
 		}
 
 		const headers: Record<string, string> = {
@@ -642,9 +644,9 @@ static async probeModelsEndpoint(
 				return await fetch(u, { headers, signal: ac.signal });
 			} catch (err) {
 				if ((err as Error).name === "AbortError") {
-					throw new Error("请求超时（15 秒）");
+					throw new Error("Request timed out (15s)");
 				}
-				throw new Error(`请求失败：${(err as Error).message}`);
+				throw new Error(`Request failed: ${(err as Error).message}`);
 			} finally {
 				clearTimeout(timer);
 			}
@@ -656,7 +658,7 @@ static async probeModelsEndpoint(
 		if (res && res.status === 404 && !/\/v\d+[a-z-]*$/.test(base)) {
 			res = await tryFetch(`${base}/v1/models`);
 		}
-		if (!res) throw new Error("请求失败");
+		if (!res) throw new Error("Request failed");
 		if (!res.ok) {
 			let detail = "";
 			try {
@@ -664,7 +666,7 @@ static async probeModelsEndpoint(
 			} catch {
 				// response body already consumed / not text — ignore
 			}
-			throw new Error(`接口返回 HTTP ${res.status}${detail ? `：${detail}` : ""}`);
+			throw new Error(`HTTP ${res.status}${detail ? `: ${detail}` : ""}`);
 		}
 		let models: UiModelConfigEntry[] = [];
 		try {
@@ -682,14 +684,14 @@ static async probeModelsEndpoint(
 					.filter((m) => m.id);
 			}
 		} catch {
-			throw new Error("响应不是有效的 JSON");
+			throw new Error("Response is not valid JSON");
 		}
 		// Dedupe by id (keep the first, most complete entry) and sort by id.
 		const seen = new Set<string>();
 		models = models
 			.filter((m) => (seen.has(m.id) ? false : (seen.add(m.id), true)))
 			.sort((a, b) => a.id.localeCompare(b.id));
-		if (models.length === 0) throw new Error("接口未返回任何模型");
+		if (models.length === 0) throw new Error("No models returned");
 		return models;
 	}
 
@@ -706,7 +708,7 @@ static async probeModelsEndpoint(
 		try {
 			const pid = providerId.trim();
 			const { providers } = this.readModelsConfig();
-			// models.json 原始形状是 Record<string, unknown>——按已保存条目的结构断言
+			// models.json's raw shape is Record<string, unknown> — assert the saved-entry structure
 			const saved = providers[pid] as
 				| {
 						name?: string;
@@ -722,7 +724,7 @@ static async probeModelsEndpoint(
 				this.host.emit({
 					type: "notice",
 					level: "warning",
-					text: `服务商 ${pid} 不存在或未配置 baseUrl，无法刷新`,
+					text: `Provider ${pid} is missing or has no baseUrl, cannot refresh`,
 				});
 				return done(false, { error: "provider missing or no baseUrl" });
 			}
@@ -746,7 +748,7 @@ static async probeModelsEndpoint(
 				}
 				prev.set(f.id, {
 					...f,
-					...cur, // 手填字段优先：cur 覆盖 f 的同名字段
+					...cur, // hand-filled fields win: cur overwrites same-named fields from f
 				});
 			}
 			const merged = [...prev.values()].sort((a, b) =>
@@ -757,7 +759,7 @@ static async probeModelsEndpoint(
 				name: saved.name,
 				api: saved.api,
 				baseUrl: saved.baseUrl,
-				// apiKey/headers 不回传浏览器——saveModelConfig 会保留旧值
+				// apiKey/headers are not sent back to the browser — saveModelConfig keeps the old values
 				authHeader: saved.authHeader === true ? true : undefined,
 				models: merged,
 			});
@@ -767,15 +769,15 @@ static async probeModelsEndpoint(
 				level: "info",
 				text:
 					added > 0
-						? `🔄 已刷新 ${pid}：新增 ${added} 个模型，共 ${merged.length} 个`
-						: `🔄 已刷新 ${pid}：无新增模型（共 ${merged.length} 个）`,
+						? `Refreshed ${pid}: added ${added} model(s), ${merged.length} total`
+						: `Refreshed ${pid}: no new models (${merged.length} total)`,
 			});
 			return done(true, { added, total: merged.length });
 		} catch (err) {
 			this.host.emit({
 				type: "notice",
 				level: "error",
-				text: `刷新模型列表失败：${(err as Error).message}`,
+				text: `Failed to refresh models: ${(err as Error).message}`,
 			});
 			return done(false, { error: (err as Error).message });
 		}
@@ -791,7 +793,7 @@ static async probeModelsEndpoint(
 			this.host.emit({
 				type: "notice",
 				level: "error",
-				text: "服务商 ID 无效（仅字母/数字/._-）",
+				text: "Invalid provider ID (letters, digits, ._- only)",
 			});
 			return;
 		}
@@ -806,7 +808,7 @@ static async probeModelsEndpoint(
 				...(m.maxTokens ? { maxTokens: Number(m.maxTokens) } : {}),
 			}));
 		if (models.length === 0) {
-			this.host.emit({ type: "notice", level: "error", text: "至少需要一个模型" });
+			this.host.emit({ type: "notice", level: "error", text: "At least one model is required" });
 			return;
 		}
 		try {
@@ -862,13 +864,13 @@ static async probeModelsEndpoint(
 			this.host.emit({
 				type: "notice",
 				level: "info",
-				text: `✅ 已保存服务商 ${pid}（${models.length} 个模型）并刷新模型列表`,
+				text: `Saved provider ${pid} (${models.length} models) and refreshed the list`,
 			});
 		} catch (err) {
 			this.host.emit({
 				type: "notice",
 				level: "error",
-				text: `保存模型配置失败：${(err as Error).message}`,
+				text: `Failed to save model config: ${(err as Error).message}`,
 			});
 		}
 		this.host.flushSnapshot();
@@ -882,7 +884,7 @@ static async probeModelsEndpoint(
 				this.host.emit({
 					type: "notice",
 					level: "info",
-					text: `服务商 ${providerId} 不存在`,
+					text: `Provider ${providerId} does not exist`,
 				});
 				return;
 			}
@@ -897,13 +899,13 @@ static async probeModelsEndpoint(
 			this.host.emit({
 				type: "notice",
 				level: "info",
-				text: `🗑  已删除服务商 ${providerId}`,
+				text: `Deleted provider ${providerId}`,
 			});
 		} catch (err) {
 			this.host.emit({
 				type: "notice",
 				level: "error",
-				text: `删除模型配置失败：${(err as Error).message}`,
+				text: `Failed to delete model config: ${(err as Error).message}`,
 			});
 		}
 		this.host.flushSnapshot();

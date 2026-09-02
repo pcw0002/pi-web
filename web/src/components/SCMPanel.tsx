@@ -160,7 +160,7 @@ export function ScmPanel({
 				setBusy(false);
 				setError(null);
 				if (!data.ok) {
-					setError(data.error ?? "查询失败");
+					setError(data.error ?? t("error"));
 					return;
 				}
 				if (data.notRepo) {
@@ -207,7 +207,7 @@ export function ScmPanel({
 				diffReqRef.current = -1;
 				setDiffLoading(false);
 				if (!data.ok) {
-					setError(data.error ?? "查询失败");
+					setError(data.error ?? t("error"));
 					return;
 				}
 				const file = selectedFileRef.current;
@@ -222,7 +222,7 @@ export function ScmPanel({
 				historyReqRef.current = -1;
 				setHistoryLoading(false);
 				if (!data.ok) {
-					setError(data.error ?? "查询失败");
+					setError(data.error ?? t("error"));
 					return;
 				}
 				setHistory((data.history ?? []).map((c) => ({ ...c })));
@@ -230,13 +230,13 @@ export function ScmPanel({
 				commitReqRef.current = -1;
 				setCommitLoading(false);
 				if (!data.ok) {
-					setError(data.error ?? "查询失败");
+					setError(data.error ?? t("error"));
 					return;
 				}
 				setCommitDetail(data.text ?? "");
 			}
 		},
-		[],
+		[t],
 	);
 
 	// Responses arrive through chat.scmData — apply when the reqId matches.

@@ -1,15 +1,16 @@
 /**
- * collectQuestionAttachments 单测 —— 编辑重问的「原附件恢复」收集逻辑。
+ * collectQuestionAttachments unit tests — "restore original attachments" for edit-and-reask.
  *
- * 覆盖：自身内容里的图片块、紧随其后的 aside 图片卡、上传文件（uploadPath
- * 标记）、工作区路径附件（reference/inline/lines）、多个附件全部收集、以及
- * 非 file 消息打断收集。
+ * Covers: image blocks in the user message itself, immediately following aside
+ * image cards, uploaded files (uploadPath marker), workspace-path attachments
+ * (reference/inline/lines), collecting multiple attachments, and a non-file
+ * message interrupting collection.
  */
 import { describe, expect, it } from "vitest";
 import { collectQuestionAttachments } from "../../web/src/question-attachments.js";
 import type { EditPromptAttachment } from "../../web/src/question-attachments.js";
 
-// 结构化镜像（与 web/src/question-attachments.ts 的输入类型一致）
+// Structural mirror (matches the input types of web/src/question-attachments.ts)
 interface TestBlock {
 	type: string;
 	text?: string;
@@ -58,11 +59,11 @@ function fileCard(
 }
 
 describe("collectQuestionAttachments", () => {
-	it("收集用户自身内容里的图片块", () => {
+	it("collects image blocks from the user message itself", () => {
 		const u = {
-			...user("u1", "看图"),
+			...user("u1", "look at image"),
 			content: [
-				{ type: "text", text: "看图" },
+				{ type: "text", text: "look at image" },
 				{ type: "image", dataUrl: PNG },
 			],
 		};
@@ -73,20 +74,20 @@ describe("collectQuestionAttachments", () => {
 		expect(atts[0].path).toBe("");
 	});
 
-	it("收集紧随其后的图片 aside 卡（含视觉桥缩略图）", () => {
+	it("collects immediately following image aside cards (including vision-bridge thumbnails)", () => {
 		const aside = fileCard(
 			"c1",
 			[{ type: "image", dataUrl: PNG }],
-			{ name: "图.png", mode: "image" },
+			{ name: "pic.png", mode: "image" },
 		);
 		const map = collectQuestionAttachments([user("u1", "q"), aside]);
 		const atts = map.get("u1")!;
 		expect(atts).toHaveLength(1);
 		expect(atts[0].imageData).toContain("iVBORw0KG");
-		expect(atts[0].name).toBe("图.png");
+		expect(atts[0].name).toBe("pic.png");
 	});
 
-	it("上传文件（upload:true）→ uploadPath 附件", () => {
+	it("uploaded file (upload:true) → uploadPath attachment", () => {
 		const aside = fileCard(
 			"c1",
 			[{ type: "text", text: '<file path="C:/data/u/1/2-x.txt" />' }],
@@ -100,7 +101,7 @@ describe("collectQuestionAttachments", () => {
 		expect(atts[0].imageData).toBeUndefined();
 	});
 
-	it("工作区路径附件：reference → path+mode", () => {
+	it("workspace-path attachment: reference → path+mode", () => {
 		const aside = fileCard(
 			"c1",
 			[{ type: "text", text: '<file path="src/a.ts" size="10" />' }],
@@ -113,7 +114,7 @@ describe("collectQuestionAttachments", () => {
 		expect(atts[0].mode).toBe("reference");
 	});
 
-	it("工作区路径附件：lines → path+mode+lines 范围", () => {
+	it("workspace-path attachment: lines → path+mode+lines range", () => {
 		const aside = fileCard(
 			"c1",
 			[{ type: "text", text: '<file path="src/a.ts" lines="2-3">```x```</file>' }],
@@ -134,7 +135,7 @@ describe("collectQuestionAttachments", () => {
 		expect(atts[0].lines).toEqual({ start: 2, end: 3 });
 	});
 
-	it("多个图片 + 多个文件 + 路径附件全部收集", () => {
+	it("collects all of: multiple images + multiple files + path attachments", () => {
 		const messages: TestMessage[] = [
 			user("u1", "q"),
 			fileCard("c1", [{ type: "image", dataUrl: PNG }], { name: "a.png", mode: "image" }),
@@ -158,7 +159,7 @@ describe("collectQuestionAttachments", () => {
 		expect(kinds).toEqual(["image", "image", "upload", "path"]);
 	});
 
-	it("不收集：assistant 消息打断 aside 序列 / 无附件的纯文本问题", () => {
+	it("does not collect: assistant message interrupting the aside sequence / plain-text question with no attachments", () => {
 		const interrupted = [
 			user("u1", "q"),
 			assistant("a1"),
@@ -169,7 +170,7 @@ describe("collectQuestionAttachments", () => {
 		expect(collectQuestionAttachments([user("u1", "q")]).has("u1")).toBe(false);
 	});
 
-	it("返回的附件可移除后重新发送（编辑重问的 attachments 形状）", () => {
+	it("returned attachments can be dropped and resent (edit-and-reask attachments shape)", () => {
 		const aside = fileCard(
 			"c1",
 			[{ type: "text", text: '<file path="src/a.ts" lines="1-1">```x```</file>' }],
@@ -177,7 +178,7 @@ describe("collectQuestionAttachments", () => {
 		);
 		const atts: EditPromptAttachment[] =
 			collectQuestionAttachments([user("u1", "q"), aside]).get("u1") ?? [];
-		// 用户移除第一项后剩下的仍可直接作为 edit_message.attachments 发送
+		// After the user removes the first item, the rest can still be sent as edit_message.attachments
 		const kept = atts.slice(1);
 		expect(kept).toEqual([]);
 	});

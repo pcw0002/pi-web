@@ -112,7 +112,7 @@ async function seedChat() {
 				ws.send(
 					JSON.stringify({
 						type: "prompt",
-						text: "请总结这些文件",
+						text: "Please summarize these files",
 						attachments,
 					}),
 				);
@@ -167,7 +167,7 @@ async function main() {
 	const firstCollapsedPreview = (await collapsed.first().textContent()) ?? "";
 	check(
 		"collapsed row shows a text preview",
-		firstCollapsedPreview.includes("请总结这些文件"),
+		firstCollapsedPreview.includes("Please summarize these files"),
 	);
 	const attachmentRow = page.locator(".msg-collapsed", {
 		hasText: "seed-01",
@@ -176,7 +176,7 @@ async function main() {
 		"attachment messages collapse with file-name preview",
 		(await attachmentRow.count()) > 0,
 	);
-	check("collapsed row offers 展开", firstCollapsedPreview.includes("展开"));
+	check("collapsed row offers Expand", firstCollapsedPreview.includes("Expand"));
 
 	// -- expand on click ------------------------------------------------------
 	const beforeCount = await page.locator(".msg-collapsed").count();
@@ -192,7 +192,7 @@ async function main() {
 		(await page.locator(".msg .msg-text").first().textContent()) ?? "";
 	check(
 		"expanded content rendered (question text visible)",
-		expandedText.includes("请总结这些文件"),
+		expandedText.includes("Please summarize these files"),
 	);
 	const collapseBtn = await page
 		.locator(".msg .msg-collapse-btn")
@@ -200,14 +200,14 @@ async function main() {
 		.textContent()
 		.catch(() => null);
 	check(
-		"expanded message shows 收起 button",
-		collapseBtn?.includes("收起") ?? false,
+		"expanded message shows Collapse button",
+		collapseBtn?.includes("Collapse") ?? false,
 	);
 
 	// -- collapse again -------------------------------------------------------
 	await page.locator(".msg .msg-collapse-btn").first().click();
 	await page.waitForSelector(".msg-collapsed", { timeout: 5000 });
-	check("收起 collapses the message back", (await collapsed.count()) > 0);
+	check("collapse folds the message back", (await collapsed.count()) > 0);
 
 	// -- no console errors ----------------------------------------------------
 	check("no page errors", consoleErrors.length === 0);

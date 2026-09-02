@@ -13,8 +13,10 @@ import type {
 	ModelInfo,
 	ProjectSummary,
 	ProviderStatus,
+	ReviewIndexEntry,
 	ServerMessage,
 	SessionSummary,
+	SessionTreeItem,
 	SlashCommandInfo,
 	ToolStatus,
 	TerminalInfo,
@@ -117,7 +119,7 @@ export interface ChatState {
 	goal: GoalStatus;
 	/** Settings-panel state (system prompt, skill/extension toggles, presets). */
 	settings: UiSettingsState | null;
-	/** AI-started background servers (managed from the 后台任务 panel). The
+	/** AI-started background servers (managed from the Background Tasks panel). The
 	 *  list lives on the client session, so it survives conversation ends. */
 	bgServers: BgServer[];
 	/** Last fetch_models probe result (custom-provider model list), matched by
@@ -147,6 +149,11 @@ export interface ChatState {
 	/** Last source-control query result (scm_status / scm_filediff /
 	 *  scm_commit), matched by reqId in the SCM panel. */
 	scmData: ServerMessage | null;
+	/** Last Local Review query (review_diff / review_submit). */
+	reviewData: ServerMessage | null;
+	reviewStatus: { pending: ReviewIndexEntry[]; commentCount: number };
+	reviewNudge: boolean;
+	sessionTree: SessionTreeItem[] | null;
 	/** Last global-search file query result, matched by reqId in the
 	 *  global search panel (stale results with older reqIds are ignored). */
 	fileSearch: {
@@ -196,6 +203,11 @@ type Action =
 	| { type: "refresh_provider_result"; result: { reqId: number; ok: boolean; added?: number; total?: number; error?: string } }
 	| { type: "clone_provider_result"; result: { reqId: number; ok: boolean; config?: UiProviderConfig; error?: string } }
 	| { type: "scm_data"; data: ServerMessage }
+	| { type: "review_data"; data: ServerMessage }
+	| { type: "review_status"; pending: ReviewIndexEntry[]; commentCount: number }
+	| { type: "review_nudge" }
+	| { type: "review_nudge_ack" }
+	| { type: "session_tree"; items: SessionTreeItem[] | null }
 	| {
 			type: "file_search_result";
 			result: {
@@ -450,7 +462,7 @@ function reducer(state: ChatState, action: Action): ChatState {
 			const text = (prev?.text ?? "") + action.delta;
 			const capped =
 				text.length > MAX_LIVE_OUTPUT
-					? `…[前 ${text.length - MAX_LIVE_OUTPUT} 字符已省略]…\n` +
+					? `…[${text.length - MAX_LIVE_OUTPUT} characters omitted]…\n` +
 					  text.slice(text.length - MAX_LIVE_OUTPUT)
 					: text;
 			const liveOutputs = new Map(state.liveOutputs);
@@ -515,6 +527,19 @@ function reducer(state: ChatState, action: Action): ChatState {
 			return { ...state, installResult: action.result };
 		case "scm_data":
 			return { ...state, scmData: action.data };
+		case "review_data":
+			return { ...state, reviewData: action.data };
+		case "review_status":
+			return {
+				...state,
+				reviewStatus: { pending: action.pending, commentCount: action.commentCount },
+			};
+		case "review_nudge":
+			return { ...state, reviewNudge: true };
+		case "review_nudge_ack":
+			return { ...state, reviewNudge: false };
+		case "session_tree":
+			return { ...state, sessionTree: action.items };
 		case "file_search_result":
 			return { ...state, fileSearch: action.result };
 		case "scm_changed":
@@ -600,12 +625,14 @@ const CLIENT_ID_KEY = "pi-web-client-id";
 let cachedClientId: string | null = null;
 
 /**
- * 客户端标识 —— **每标签页独立**（sessionStorage 而非 localStorage）。
+ * Client id — **per tab** (sessionStorage, not localStorage).
  *
- * 曾用 localStorage：同源所有标签页共享同一 clientId，后端把它们挂到同一个
- * ClientSession 上互为镜像——B 标签页切换对话会同步切走 A 页、甚至把 A 页
- * 正在输出的 agent 强制中断且状态持久化（issue #10）。改为 sessionStorage 后
- * 新开标签页即新客户端；刷新本页仍保留同一 id，client-state（最近项目等）不丢。
+ * localStorage used to share one clientId across all same-origin tabs, so the
+ * backend hung them on the same ClientSession as mirrors — switching
+ * conversation on tab B also switched tab A, and could even abort tab A's
+ * running agent with the interrupted state persisted (issue #10). With
+ * sessionStorage a new tab is a new client; refreshing this tab keeps the
+ * same id so client-state (recent projects, etc.) is not lost.
  */
 export function getClientId(): string {
 	if (cachedClientId) return cachedClientId;
@@ -617,7 +644,7 @@ export function getClientId(): string {
 			sessionStorage.setItem(CLIENT_ID_KEY, id);
 		}
 	} catch {
-		// storage 不可用（隐私模式等）：退化为页面生命周期内的一次性 id
+		// Storage unavailable (private mode, etc.): fall back to a one-shot id for this page lifetime.
 		id = id ?? randomUuid();
 	}
 	cachedClientId = id;
@@ -667,6 +694,10 @@ export function useChat() {
 		refreshProviderResult: null,
 		cloneProviderResult: null,
 		scmData: null,
+		reviewData: null,
+		reviewStatus: { pending: [], commentCount: 0 },
+		reviewNudge: false,
+		sessionTree: null,
 		fileSearch: null,
 		scmDirty: 0,
 		plugins: [],
@@ -725,7 +756,7 @@ export function useChat() {
 	const pushNotice = useCallback((level: Notice["level"], text: string) => {
 		const id = ++noticeId.current;
 		dispatch({ type: "notice", notice: { id, level, text } });
-		// 自动消失计时由通知组件（NoticeToast）管理：悬浮暂停、移开继续。
+		// Auto-dismiss timing is owned by NoticeToast: pause on hover, resume on leave.
 	}, []);
 
 	const send = useCallback((msg: ClientMessage) => {
@@ -909,6 +940,22 @@ export function useChat() {
 				case "scm_data":
 					dispatch({ type: "scm_data", data: msg });
 					break;
+				case "review_data":
+					dispatch({ type: "review_data", data: msg });
+					break;
+				case "review_status":
+					dispatch({
+						type: "review_status",
+						pending: msg.pending,
+						commentCount: msg.commentCount,
+					});
+					break;
+				case "review_nudge":
+					dispatch({ type: "review_nudge" });
+					break;
+				case "session_tree_data":
+					dispatch({ type: "session_tree", items: msg.items });
+					break;
 				case "search_files_result":
 					dispatch({
 						type: "file_search_result",
@@ -1065,6 +1112,11 @@ export function useChat() {
 		(id: number) => dispatch({ type: "dismiss_notice", id }),
 		[],
 	);
+	const ackReviewNudge = useCallback(() => dispatch({ type: "review_nudge_ack" }), []);
+	const closeSessionTree = useCallback(
+		() => dispatch({ type: "session_tree", items: null }),
+		[],
+	);
 
 	// -- terminal tab management ----------------------------------------------
 
@@ -1091,6 +1143,8 @@ export function useChat() {
 		send,
 		pushNotice,
 		dismissNotice,
+		ackReviewNudge,
+		closeSessionTree,
 		terminal: {
 			create: terminalCreate,
 			close: terminalClose,
@@ -1103,6 +1157,8 @@ export function useChat() {
 		send,
 		pushNotice,
 		dismissNotice,
+		ackReviewNudge,
+		closeSessionTree,
 		terminal: {
 			create: terminalCreate,
 			close: terminalClose,

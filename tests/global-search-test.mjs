@@ -1,7 +1,7 @@
 /**
- * 全局搜索（search_files / search_files_result）+ BgServer.command 协议冒烟。
- * 零 token：自起编译后的 server（隔离端口 8962 + 临时 data-dir），
- * 发 search_files 断言 reqId 回显与文件名匹配结果；空 query 返回空列表。
+ * Global search (search_files / search_files_result) + BgServer.command protocol smoke.
+ * Zero token: self-starts a compiled server (isolated port 8962 + temp data-dir),
+ * sends search_files and asserts reqId echo + filename matches; empty query returns [].
  */
 import { portUp } from "./lib/port-utils.mjs";
 import { fileURLToPath } from "node:url";
@@ -21,7 +21,7 @@ function check(name, ok, extra = "") {
 	if (!ok) failures++;
 }
 
-// 临时工作区：带嵌套目录 + node_modules（应被忽略）
+// Temp workspace: nested dirs + node_modules (should be ignored)
 const workDir = join(mkdtempSync(join(tmpdir(), "pi-web-gs-test-")), "proj");
 mkdirSync(join(workDir, "src"), { recursive: true });
 mkdirSync(join(workDir, "node_modules", "somepkg"), { recursive: true });
@@ -112,54 +112,54 @@ async function run() {
 	await sleep(300);
 	const c = await connect();
 
-	// 1) 文件搜索命中 + reqId 回显
+	// 1) file search hits + reqId echo
 	c.send({ type: "search_files", reqId: 42, query: "util" });
 	const r1 = await c.next(
 		(m) => m.type === "search_files_result" && m.reqId === 42,
 		"search_files_result #42",
 	);
-	check("reqId 回显", r1.reqId === 42);
+	check("reqId is echoed", r1.reqId === 42);
 	check("ok:true", r1.ok === true, JSON.stringify(r1).slice(0, 200));
 	const names = (r1.results ?? []).map((r) => r.name);
-	check("命中 src/alpha-util.ts", names.includes("alpha-util.ts"), names.join(","));
+	check("hits src/alpha-util.ts", names.includes("alpha-util.ts"), names.join(","));
 	const utilHit = (r1.results ?? []).find((r) => r.name === "alpha-util.ts");
 	check(
-		"相对路径为 src/alpha-util.ts",
+		"relative path is src/alpha-util.ts",
 		utilHit?.path === "src/alpha-util.ts",
 		utilHit?.path,
 	);
 
-	// 2) node_modules 被忽略
+	// 2) node_modules is ignored
 	c.send({ type: "search_files", reqId: 43, query: "somepkg" });
 	const r2 = await c.next(
 		(m) => m.type === "search_files_result" && m.reqId === 43,
 		"result #43",
 	);
 	check(
-		"node_modules 不进结果",
+		"node_modules is not in results",
 		r2.ok && (r2.results ?? []).length === 0,
 		JSON.stringify(r2.results),
 	);
 
-	// 3) 目录也匹配
+	// 3) directories match too
 	c.send({ type: "search_files", reqId: 44, query: "src" });
 	const r3 = await c.next(
 		(m) => m.type === "search_files_result" && m.reqId === 44,
 		"result #44",
 	);
 	check(
-		"目录 src 命中且 type=dir",
+		"directory src is hit with type=dir",
 		(r3.results ?? []).some((r) => r.name === "src" && r.type === "dir"),
 		JSON.stringify(r3.results),
 	);
 
-	// 4) 空 query → 空列表，仍回显
+	// 4) empty query → empty list, still echoes
 	c.send({ type: "search_files", reqId: 45, query: "   " });
 	const r4 = await c.next(
 		(m) => m.type === "search_files_result" && m.reqId === 45,
 		"result #45",
 	);
-	check("空 query 返回空列表", r4.ok && r4.results.length === 0);
+	check("empty query returns an empty list", r4.ok && r4.results.length === 0);
 
 	c.ws.close();
 }

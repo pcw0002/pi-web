@@ -1,12 +1,12 @@
 <!DOCTYPE html>
-<html lang="zh">
+<html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>通知效果预览</title>
+<title>Notice preview</title>
 <link rel="stylesheet" href="../web/src/styles.css" id="theme-link">
 <style>
 	body { margin: 0; background: var(--bg); min-height: 100vh; font-family: system-ui, sans-serif; }
-	/* 模拟聊天背景：垫一层文字，验证通知背景不再透出下层内容 */
+	/* Fake chat background: padding text so we can confirm notices are opaque. */
 	.bg-text {
 		padding: 24px 10%;
 		color: var(--text-faint);
@@ -26,30 +26,30 @@
 </style>
 </head>
 <body>
-<div class="bg-text">这是垫底的聊天内容文字，用来验证通知背景是否透明。—— 这一层应该完全被通知盖住，不该透出来。</div>
+<div class="bg-text">This is padded chat text used to check whether notice backgrounds are transparent. This layer should be fully covered by notices.</div>
 
-<!-- 模拟真实结构：.notices 容器 + .notice 卡片 -->
+<!-- Mirrors the real structure: .notices container + .notice cards -->
 <div class="notices" style="position:fixed">
 	<div class="notice notice-info" id="n-info">
 		<span class="notice-icon">ℹ️</span>
-		<span class="notice-text">这是一条 info 通知 —— 背景应为不透明的深蓝 #1b2544，下面垫的文字不应透出来。</span>
+		<span class="notice-text">Info notice — background should be opaque navy #1b2544; padded text below must not show through.</span>
 		<button class="notice-close">✕</button>
 	</div>
 	<div class="notice notice-warning">
 		<span class="notice-icon">⚠️</span>
-		<span class="notice-text">这是一条 warning 通知 —— 不透明深棕 #38251f。</span>
+		<span class="notice-text">Warning notice — opaque dark brown #38251f.</span>
 		<button class="notice-close">✕</button>
 	</div>
 	<div class="notice notice-error paused">
 		<span class="notice-icon">⛔</span>
-		<span class="notice-text">这是一条 error 通知（paused 高亮态）—— 不透明暗红 #401d23。</span>
+		<span class="notice-text">Error notice (paused highlight) — opaque dark red #401d23.</span>
 		<button class="notice-close">✕</button>
 	</div>
 </div>
 
 <div class="toolbar">
-	<button onclick="document.getElementById('theme-link').href='../web/src/styles.css'">深色主题</button>
-	<button onclick="document.getElementById('theme-link').href='../themes/light.css'">浅色主题</button>
+	<button onclick="document.getElementById('theme-link').href='../web/src/styles.css'">Dark theme</button>
+	<button onclick="document.getElementById('theme-link').href='../themes/light.css'">Light theme</button>
 </div>
 </body>
 </html>

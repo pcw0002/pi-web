@@ -1,7 +1,7 @@
 {
-	"name": "邮箱",
+	"name": "Mail",
 	"version": "0.2.0",
-	"description": "IMAP/SMTP 邮件管理：收件箱浏览/搜索/读写、新邮件通知，可开关让 AI 直接管理邮箱",
+	"description": "IMAP/SMTP mail manager: browse/search/read/write inbox, new-mail notifications, optional AI tools to manage the mailbox",
 	"permissions": [
 		"net:imap/smtp",
 		"tools"

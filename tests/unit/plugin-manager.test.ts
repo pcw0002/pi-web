@@ -1,12 +1,12 @@
 /**
- * PluginManager 纯单测（零依赖、毫秒级）：不启 server、不碰真模型。
+ * PluginManager pure unit tests (zero deps, millisecond-scale): no server, no real model.
  *
- * 覆盖：
- * - activate/deactivate 生命周期（目录删除后 dispose 调 deactivate）
- * - handleMessage 按 pluginId 路由，onMessage 回调带来源 clientId，可注销
- * - emitToolEvent 扇出 + 单个 handler 抛错被隔离
- * - notifyAll / sendTo 定向投递（fake sender）
- * - scan 跳过坏 manifest；epoch 在 reload 后递增且重激活
+ * Covers:
+ * - activate/deactivate lifecycle (dispose calls deactivate after the dir is deleted)
+ * - handleMessage routes by pluginId; onMessage callback gets the source clientId; can unregister
+ * - emitToolEvent fan-out + a throwing handler is isolated
+ * - notifyAll / sendTo targeted delivery (fake sender)
+ * - scan skips a bad manifest; epoch increments after reload and reactivates
  */
 import { describe, expect, it, beforeEach, afterEach } from "vitest";
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
@@ -125,7 +125,7 @@ describe("PluginManager", () => {
 			level: "warning",
 			text: "plugin says hi",
 		});
-		// 定向消息只进 b
+		// Targeted message only goes to b
 		expect(a.filter((m) => m.type === "plugin_data")).toHaveLength(0);
 		expect(b.filter((m) => m.type === "plugin_data")).toHaveLength(1);
 	});
@@ -145,7 +145,7 @@ describe("PluginManager", () => {
 		mgr.dispose();
 		expect((globalThis as { __deact?: number[] }).__deact?.length).toBe(2);
 
-		// 激活失败 → error 字段，不炸进程
+		// Activation failure → error field, does not crash the process
 		makePlugin("broken", THROW_PLUGIN);
 		const third = await mgr.ensureLoaded();
 		expect(third.find((p) => p.id === "broken")?.error).toContain("boom");
@@ -154,7 +154,7 @@ describe("PluginManager", () => {
 	it("manifest icon/description surface in the catalog", async () => {
 		makePlugin("pretty", "export default {};", {
 			client: true,
-			manifest: { name: "漂亮", icon: "✨", description: "desc" },
+			manifest: { name: "Pretty", icon: "✨", description: "desc" },
 		});
 		const list = await mgr.list();
 		const p = list.find((x) => x.id === "pretty");
@@ -164,7 +164,7 @@ describe("PluginManager", () => {
 	});
 });
 
-// ---- cwd 跟随（host.cwd 活值 + onCwdChange 扇出） ----------------------------------
+// ---- cwd follow (live host.cwd + onCwdChange fan-out) ----------------------------------
 type Probe = { activatedCwd?: string; seen?: string[]; liveCwdInHandler?: string };
 const probe = (): Probe => (globalThis as unknown as { __cwdProbe: Probe }).__cwdProbe;
 
@@ -175,45 +175,45 @@ export default {
 		const p = globalThis.__cwdProbe;
 		p.activatedCwd = host.cwd;
 		p.seen = [];
-		host.onCwdChange(() => { throw new Error("boom"); }); // 抛错钩子：验证扇出隔离
+		host.onCwdChange(() => { throw new Error("boom"); }); // throwing hook: verify fan-out isolation
 		return host.onCwdChange((cwd) => {
 			p.seen.push(cwd);
-			p.liveCwdInHandler = host.cwd; // getter 必须返回活值（新根）
+			p.liveCwdInHandler = host.cwd; // getter must return the live value (new root)
 			if (String(cwd).endsWith("proj-b")) host.broadcast({ kind: "workspace", root: cwd });
 		});
 	},
 };`;
 
-describe("PluginManager cwd 跟随", () => {
-	it("notifyCwd 更新 host.cwd、触发钩子并广播 workspace", async () => {
+describe("PluginManager cwd follow", () => {
+	it("notifyCwd updates host.cwd, fires hooks, and broadcasts workspace", async () => {
 		makePlugin("ed", CWD_PLUGIN);
 		await mgr.ensureLoaded();
-		// 初始值 = 构造时传入的服务启动目录
+		// Initial value = the server start dir passed to the constructor
 		expect(probe().activatedCwd).toBe(resolve(dir));
 
 		const sent: ServerMessage[] = [];
 		mgr.addSender((m) => sent.push(m), () => null);
 		const next = resolve(join(dir, "proj-b"));
-		mgr.notifyCwd(join(dir, "proj-b")); // 内部会 resolve，不必预先规范化
+		mgr.notifyCwd(join(dir, "proj-b")); // internally resolves; no need to pre-normalize
 		expect(probe().seen).toEqual([next]);
 		expect(probe().liveCwdInHandler).toBe(next);
 		expect(sent).toEqual([
 			{ type: "plugin_data", pluginId: "ed", payload: { kind: "workspace", root: next } },
 		]);
 
-		mgr.notifyCwd(join(dir, "proj-b")); // 幂等：同路径 no-op，不再触发钩子/广播
+		mgr.notifyCwd(join(dir, "proj-b")); // idempotent: same path is a no-op, no extra hook/broadcast
 		expect(probe().seen).toHaveLength(1);
 		expect(sent).toHaveLength(1);
 	});
 
-	it("抛错的 cwd 钩子被隔离，其余钩子照常执行", async () => {
-		makePlugin("ed", CWD_PLUGIN); // 内含一个必抛错钩子 + 一个正常钩子
+	it("throwing cwd hooks are isolated; remaining hooks still run", async () => {
+		makePlugin("ed", CWD_PLUGIN); // contains one always-throwing hook + one normal hook
 		await mgr.ensureLoaded();
 		expect(() => mgr.notifyCwd(join(dir, "x"))).not.toThrow();
-		expect(probe().seen).toHaveLength(1); // 正常钩子仍收到事件
+		expect(probe().seen).toHaveLength(1); // the normal hook still received the event
 	});
 
-	it("dispose 反激活后旧钩子不再被触发", async () => {
+	it("old hooks are not fired after dispose deactivates", async () => {
 		makePlugin("ed", CWD_PLUGIN);
 		await mgr.ensureLoaded();
 		mgr.dispose();

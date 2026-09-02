@@ -1,16 +1,18 @@
 /**
- * MCP 工具桥 —— 把外部 Model Context Protocol（stdio）服务器暴露的工具接入
- * pi 会话，让 AI 能调用真实的第三方工具（文件、数据库、GitHub…）。
+ * MCP tool bridge — exposes tools from external Model Context Protocol
+ * (stdio) servers into the pi session so the agent can call real third-party
+ * tools (files, databases, GitHub, …).
  *
- * 约定（MCP 规范流式子集）：
- *  - stdio 传输 = stdin/stdout 上换行分隔的 JSON-RPC 2.0（NDJSON），不依赖任何
- *    第三方包；stderr 是自由日志通道。
- *  - 握手：initialize（带 protocolVersion）→ notifications/initialized →
- *    tools/list → tools/call。
- *  - 工具工具入会：本模块把每个远端工具适配成 PluginAgentTool，经
- *    pluginToolsProvider 走与插件工具完全相同的 customTools 管线。
+ * Contract (streaming subset of the MCP spec):
+ *  - stdio transport = newline-delimited JSON-RPC 2.0 (NDJSON) on
+ *    stdin/stdout; no third-party packages; stderr is a free-form log channel.
+ *  - handshake: initialize (with protocolVersion) → notifications/initialized →
+ *    tools/list → tools/call.
+ *  - tool enrollment: this module adapts each remote tool into a
+ *    PluginAgentTool and feeds it through pluginToolsProvider — the same
+ *    customTools pipeline as plugin tools.
  *
- * 配置：<PI_WEB_DATA_DIR>/mcp.json，形如
+ * Config: <PI_WEB_DATA_DIR>/mcp.json, shaped like
  *   { "servers": { "gitserv": { "command": "node", "args": ["mcp.js"], "cwd": "/x" } } }
  */
 
@@ -19,13 +21,13 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { PluginAgentTool } from "./plugins.js";
 
-/** JSON-RPC 2.0 over stdio：每行一条 JSON。 */
+/** JSON-RPC 2.0 over stdio: one JSON object per line. */
 export interface McpServerSpec {
 	command: string;
 	args?: string[];
 	cwd?: string;
 	env?: Record<string, string>;
-	// 预设的 MCP 协议版本（缺省用最新已知）。
+	// Optional MCP protocol version (defaults to the latest known).
 	protocolVersion?: string;
 }
 
@@ -37,13 +39,15 @@ interface RpcIncoming {
 	error?: { code: number; message: string; data?: unknown };
 }
 
-const PROTOCOL_VERSION = "2025-03-26"; // 广泛支持的工具版本
+const PROTOCOL_VERSION = "2025-03-26"; // widely supported tools version
 
 let rpcSeq = 0;
 
 /**
- * 单个 MCP 服务器的客户端：管理子进程、请求/响应按 id 关联、握手与工具调用。
- * 线程模型：无需并发控制（MCP 允许乱序 + 我们按请求 id 匹配响应）。
+ * Client for a single MCP server: manages the child process, correlates
+ * request/response by id, handshake, and tool calls.
+ * Threading: no extra concurrency control (MCP allows out-of-order replies
+ * and we match responses by request id).
  */
 export class McpClient {
 	private child: ChildProcess | null = null;
@@ -52,7 +56,7 @@ export class McpClient {
 	private pending = new Map<string, { resolve: (v: unknown) => void; reject: (e: Error) => void; timer: NodeJS.Timeout }>();
 	private log: (...a: unknown[]) => void;
 	readonly name: string;
-	/** 已握手的工具列表（tools/list 结果缓存）。 */
+	/** Tools after handshake (cached tools/list result). */
 	private tools: McpToolDefinition[] = [];
 	private shuttingDown = false;
 
@@ -61,7 +65,7 @@ export class McpClient {
 		this.log = log ?? (() => {});
 	}
 
-	/** 启动子进程 + 握手 + 拉取工具列表。 */
+	/** Spawn the child, handshake, and fetch the tool list. */
 	async start(timeoutMs = 8000): Promise<void> {
 		if (this.child) return;
 		const { command, args = [], cwd, env } = this.spec;
@@ -77,21 +81,22 @@ export class McpClient {
 		child.on("error", (err) => this.rejectAll(new Error(`[mcp:${this.name}] spawn error: ${err.message}`)));
 		child.on("exit", (code, sig) => {
 			this.child = null;
-			if (!this.shuttingDown) this.rejectAll(new Error(`[mcp:${this.name}] 进程退出 (${sig ?? code})`));
+			if (!this.shuttingDown) this.rejectAll(new Error(`[mcp:${this.name}] process exited (${sig ?? code})`));
 		});
 		child.stdout.setEncoding("utf8");
 		child.stdout.on("data", (chunk: string) => this.onData(chunk));
 
-		// 握手
+		// Handshake.
 		const handshake = await this.request("initialize", {
 			protocolVersion: this.spec.protocolVersion ?? PROTOCOL_VERSION,
 			capabilities: {},
 			clientInfo: { name: "pi-web-ui", version: "0.41.0" },
 		});
 		const version = (handshake as { protocolVersion?: string })?.protocolVersion ?? this.spec.protocolVersion ?? PROTOCOL_VERSION;
-		// 通知 initialized（无 id 的 notification）
+		// notifications/initialized (notification — no id).
 		this.send({ jsonrpc: "2.0", method: "notifications/initialized" });
-		// 仍以协商协议版本调用 tools（多数服务器对新版本容忍，这里用协商结果）
+		// Still call tools with the negotiated protocol version (most servers
+		// tolerate newer versions; we use whatever was negotiated).
 		void version;
 		const listed = (await this.request("tools/list", {}) ?? {}) as {
 			tools?: McpToolDefinition[];
@@ -100,12 +105,12 @@ export class McpClient {
 		this.log(`[mcp:${this.name}] ready, ${this.tools.length} tools`);
 	}
 
-	/** 已发现工具。 */
+	/** Discovered tools. */
 	getTools(): McpToolDefinition[] {
 		return this.tools.map((t) => ({ ...t }));
 	}
 
-	/** 调用一个工具，返回结果文本（多 content 拼接为 JSON 字符串保真）。 */
+	/** Call a tool; return the result text (multiple content parts joined as JSON for fidelity). */
 	async call(name: string, args: Record<string, unknown>, timeoutMs = 60000): Promise<unknown> {
 		const res = (await this.request("tools/call", { name, arguments: args }, timeoutMs)) as {
 			content?: Array<{ type?: string; text?: string }>;
@@ -113,16 +118,16 @@ export class McpClient {
 			structuredContent?: unknown;
 		};
 		if (res?.isError) {
-			const msg = (res.content ?? []).map((c) => c.text ?? "").join("\n").trim() || "MCP 工具错误";
+			const msg = (res.content ?? []).map((c) => c.text ?? "").join("\n").trim() || "MCP tool error";
 			throw new Error(msg);
 		}
-		// 结构化结果优先，其次文本内容。
+		// Prefer structured content; fall back to text.
 		if (res?.structuredContent !== undefined) return res.structuredContent;
 		const text = (res.content ?? []).map((c) => c.text ?? "").filter((x) => x).join("\n");
 		return { content: text, isError: !!res.isError };
 	}
 
-	/** 关闭：kill 子进程，拒绝所有在途请求。 */
+	/** Shut down: kill the child and reject all in-flight requests. */
 	close(): void {
 		this.shuttingDown = true;
 		this.rejectAll(new Error("[mcp] client closed"));
@@ -130,13 +135,13 @@ export class McpClient {
 			try {
 				this.child.kill();
 			} catch {
-				/* 已退出 */
+				/* already exited */
 			}
 			this.child = null;
 		}
 	}
 
-	// -- 内部 -------------------------------------------------------------
+	// -- internals --------------------------------------------------------
 	private send(msg: unknown): void {
 		const stdin = this.child?.stdin;
 		if (!stdin || !stdin.writable) return;
@@ -149,7 +154,7 @@ export class McpClient {
 		return new Promise<unknown>((resolve, reject) => {
 			const timer = setTimeout(() => {
 				this.pending.delete(outId);
-				reject(new Error(`[mcp:${this.name}] ${method} 超时 (${timeoutMs}ms)`));
+				reject(new Error(`[mcp:${this.name}] ${method} timed out (${timeoutMs}ms)`));
 			}, timeoutMs);
 			this.pending.set(outId, { resolve, reject, timer });
 			this.send({ jsonrpc: "2.0", id: id, method, params });
@@ -167,7 +172,7 @@ export class McpClient {
 			try {
 				msg = JSON.parse(line) as RpcIncoming;
 			} catch {
-				this.log(`[mcp:${this.name}] 非 JSON 行（忽略）：`, line.slice(0, 120));
+				this.log(`[mcp:${this.name}] non-JSON line (ignored):`, line.slice(0, 120));
 				continue;
 			}
 			this.handleMessage(msg);
@@ -178,16 +183,16 @@ export class McpClient {
 		if (msg.id !== undefined) {
 			const pending = this.pending.get(String(msg.id));
 			if (!pending) {
-				this.log(`[mcp:${this.name}] 未知响应 id=${msg.id}`);
+				this.log(`[mcp:${this.name}] unknown response id=${msg.id}`);
 				return;
 			}
 			this.pending.delete(String(msg.id));
 			clearTimeout(pending.timer);
-			if (msg.error) pending.reject(new Error(`[mcp:${this.name}] ${msg.error.message ?? "MCP 错误"}`));
+			if (msg.error) pending.reject(new Error(`[mcp:${this.name}] ${msg.error.message ?? "MCP error"}`));
 			else pending.resolve(msg.result);
 			return;
 		}
-		// 服务端主动通知（log / cancelled 等）——仅记录。
+		// Server-initiated notifications (log / cancelled, etc.) — log only.
 		if (msg.method === "notifications/message") {
 			const p = msg.params as { level?: string; message?: string } | undefined;
 			if (p?.message) this.log(`[mcp:${this.name}] ${p.level ?? "message"}:`, p.message);
@@ -209,7 +214,7 @@ export interface McpToolDefinition {
 	inputSchema?: Record<string, unknown>;
 }
 
-/** 读取 <dataDir>/mcp.json 里的服务器清单（尽力而为）。 */
+/** Read the server list from <dataDir>/mcp.json (best-effort). */
 export function readMcpConfig(dataDir: string): { servers: Record<string, McpServerSpec> } {
 	try {
 		const raw = JSON.parse(readFileSync(join(dataDir, "mcp.json"), "utf8")) as {
@@ -232,15 +237,15 @@ export function readMcpConfig(dataDir: string): { servers: Record<string, McpSer
 }
 
 /**
- * 整个 MCP 管理器的工具适配：把每个 MCP 工具变成 PluginAgentTool。
- * getAllToolsTool(name, callFn) 生成 execute → 转发到对应 McpClient.call。
+ * Adapt each MCP tool into a PluginAgentTool for the manager.
+ * execute forwards to the corresponding McpClient.call.
  */
 function adaptMcpTool(serverName: string, mcpTool: McpToolDefinition, client: McpClient): PluginAgentTool {
 	const name = sanitizeToolName(mcpTool.name);
 	return {
 		name,
 		label: `${serverName} · ${mcpTool.name}`,
-		description: mcpTool.description ?? `从 MCP 服务器「${serverName}」提供的工具 ${mcpTool.name}`,
+		description: mcpTool.description ?? `MCP tool ${mcpTool.name} from server ${serverName}`,
 		parameters: mcpTool.inputSchema ?? {},
 		execute: async (_toolCallId: string, params: Record<string, unknown>, _signal?: AbortSignal) => {
 			return client.call(mcpTool.name, params ?? {});
@@ -248,13 +253,13 @@ function adaptMcpTool(serverName: string, mcpTool: McpToolDefinition, client: Mc
 	};
 }
 
-/** 工具名必须是 [A-Za-z0-9_-]+（与插件工具同规则），MCP 可能含冒号/斜杠 — 归一化。 */
+/** Tool names must be [A-Za-z0-9_-]+ (same rule as plugin tools). MCP names may contain colons/slashes — normalize. */
 function sanitizeToolName(name: string): string {
 	const cleaned = (name || "").replace(/[^A-Za-z0-9_-]/g, "_");
 	return cleaned || "mcp_tool";
 }
 
-/** MCP 服务器管理器：自管多服务器生命周期 + 聚合工具。 */
+/** MCP server manager: owns multi-server lifecycle and aggregates tools. */
 export class McpBridge {
 	private clients: McpClient[] = [];
 	private tools: PluginAgentTool[] = [];
@@ -265,7 +270,7 @@ export class McpBridge {
 		private opts: { specOverride?: { name: string; spec: McpServerSpec }[] } = {},
 	) {}
 
-	/** 读取配置并启动全部服务器（顺序 fail-fast：单个失败记日志不拖垮其它）。 */
+	/** Read config and start every server (per-server fail-fast: a single failure is logged and does not take the others down). */
 	async load(): Promise<void> {
 		const cfg = optsOverrideOrRead(this.opts.specOverride, this.dataDir);
 		await Promise.all(
@@ -276,7 +281,7 @@ export class McpBridge {
 					this.clients.push(client);
 					for (const t of client.getTools()) this.tools.push(adaptMcpTool(name, t, client));
 				} catch (err) {
-					this.log(`[mcp] 服务器「${name}」启动失败：`, err instanceof Error ? err.message : err);
+					this.log(`[mcp] server "${name}" failed to start:`, err instanceof Error ? err.message : err);
 				}
 			}),
 		);

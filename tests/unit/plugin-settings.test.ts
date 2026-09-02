@@ -1,6 +1,7 @@
 /**
- * 插件声明式设置（manifest "settings" schema）单测：schema 解析校验、
- * 默认值合并、savePluginSettings 持久化 + 通知、host.getSettings 读取。
+ * Plugin declarative settings (manifest "settings" schema) unit tests:
+ * schema parse/validate, default merge, savePluginSettings persist + notify,
+ * host.getSettings read.
  */
 import { describe, expect, it, beforeEach, afterEach } from "vitest";
 import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -21,11 +22,11 @@ function makePlugin(id: string, manifest: Record<string, unknown>): Promise<Plug
 
 const SCHEMA_PLUGIN = {
 	settings: [
-		{ key: "pollSec", type: "number", label: "间隔", default: 60, min: 10, max: 600 },
-		{ key: "notify", type: "boolean", label: "通知", default: true },
-		{ key: "theme", type: "select", label: "主题", default: "dark", options: ["dark", "light"] },
-		{ key: "name", type: "text", label: "名字", default: "demo" },
-		{ key: "pass", type: "password", label: "口令", default: "" },
+		{ key: "pollSec", type: "number", label: "Interval", default: 60, min: 10, max: 600 },
+		{ key: "notify", type: "boolean", label: "Notify", default: true },
+		{ key: "theme", type: "select", label: "Theme", default: "dark", options: ["dark", "light"] },
+		{ key: "name", type: "text", label: "Name", default: "demo" },
+		{ key: "pass", type: "password", label: "Password", default: "" },
 	],
 };
 
@@ -39,24 +40,24 @@ afterEach(() => {
 	rmSync(dir, { recursive: true, force: true });
 });
 
-describe("schema 解析 + 默认值", () => {
-	it("清单带 schema 与默认合并后的值", async () => {
+describe("schema parse + defaults", () => {
+	it("catalog includes schema and values merged with defaults", async () => {
 		await makePlugin("cfg", SCHEMA_PLUGIN);
 		const list = await mgr.list();
 		const p = list.find((x) => x.id === "cfg")!;
 		expect(p.settingsSchema?.length).toBe(5);
 		expect(p.settingsValues).toEqual({ pollSec: 60, notify: true, theme: "dark", name: "demo", pass: "" });
-		// 没装过 → storage.json 不存在
+		// never saved → storage.json does not exist
 		expect(existsSync(join(dir, "plugins", "cfg", "storage.json"))).toBe(false);
 	});
 
-	it("坏字段被跳过（非法 type / 重复 key / 缺 key）", async () => {
+	it("bad fields are skipped (illegal type / duplicate key / missing key)", async () => {
 		await makePlugin("bad", {
 			settings: [
 				{ key: "ok", type: "boolean", label: "OK" },
-				{ key: "x", type: "unknown", label: "坏类型" },
-				{ key: "ok", type: "text", label: "重复" },
-				{ type: "text", label: "缺 key" },
+				{ key: "x", type: "unknown", label: "bad type" },
+				{ key: "ok", type: "text", label: "duplicate" },
+				{ type: "text", label: "missing key" },
 			],
 		});
 		const list = await mgr.list();
@@ -66,38 +67,38 @@ describe("schema 解析 + 默认值", () => {
 });
 
 describe("savePluginSettings", () => {
-	it("校验 + 原子落盘 + 保留 storage.json 其它键", async () => {
+	it("validate + atomic persist + keep other storage.json keys", async () => {
 		const h = await makePlugin("cfg", SCHEMA_PLUGIN);
-		h.storage.set("custom", 42); // 插件自己的键
+		h.storage.set("custom", 42); // plugin's own key
 		const r = mgr.savePluginSettings("cfg", { pollSec: 120, notify: false, theme: "light", name: "prod", pass: "s3cret" });
 		expect(r.error).toBeUndefined();
 		const raw = JSON.parse(readFileSync(join(dir, "plugins", "cfg", "storage.json"), "utf8"));
 		expect(raw.settings).toEqual({ pollSec: 120, notify: false, theme: "light", name: "prod", pass: "s3cret" });
-		expect(raw.custom).toBe(42); // 插件数据不被覆盖
-		// 重扫后默认值已被存值覆盖
+		expect(raw.custom).toBe(42); // plugin data is not overwritten
+		// After rescan, stored values override defaults
 		const list = await mgr.list();
 		expect(list.find((x) => x.id === "cfg")?.settingsValues).toEqual({ pollSec: 120, notify: false, theme: "light", name: "prod", pass: "s3cret" });
 	});
 
-	it("number 越界 / select 非法值被拒", async () => {
+	it("number out of range / illegal select value rejected", async () => {
 		await makePlugin("cfg", SCHEMA_PLUGIN);
-		expect(mgr.savePluginSettings("cfg", { pollSec: 5 }).error).toContain("超出范围");
-		expect(mgr.savePluginSettings("cfg", { pollSec: 9999 }).error).toContain("超出范围");
-		expect(mgr.savePluginSettings("cfg", { theme: "neon" }).error).toContain("值非法");
-		// 合法保存不受影响
+		expect(mgr.savePluginSettings("cfg", { pollSec: 5 }).error).toContain("out of range");
+		expect(mgr.savePluginSettings("cfg", { pollSec: 9999 }).error).toContain("out of range");
+		expect(mgr.savePluginSettings("cfg", { theme: "neon" }).error).toContain("invalid value");
+		// valid save is unaffected
 		expect(mgr.savePluginSettings("cfg", { pollSec: 30 }).error).toBeUndefined();
 	});
 
-	it("未声明 schema 的插件保存被拒", async () => {
+	it("save refused for plugins with no declared schema", async () => {
 		await makePlugin("noschema", { permissions: ["tools"] });
-		expect(mgr.savePluginSettings("noschema", { a: 1 }).error).toContain("没有声明式设置");
+		expect(mgr.savePluginSettings("noschema", { a: 1 }).error).toContain("no declarative settings");
 	});
 });
 
 describe("host.getSettings + onSettingsChanged", () => {
-	it("getSettings 实时反映存值；onSettingsChanged 在保存后触发", async () => {
+	it("getSettings reflects stored values live; onSettingsChanged fires after save", async () => {
 		const h = await makePlugin("cfg", SCHEMA_PLUGIN);
-		expect(h.getSettings().pollSec).toBe(60); // 默认
+		expect(h.getSettings().pollSec).toBe(60); // default
 		const received: unknown[] = [];
 		const off = h.onSettingsChanged((v) => received.push(v));
 		mgr.savePluginSettings("cfg", { pollSec: 90 });
@@ -105,6 +106,6 @@ describe("host.getSettings + onSettingsChanged", () => {
 		expect(h.getSettings().pollSec).toBe(90);
 		off();
 		mgr.savePluginSettings("cfg", { pollSec: 100 });
-		expect(received).toHaveLength(1); // 注销后不再触发
+		expect(received).toHaveLength(1); // no longer fires after unregister
 	});
 });

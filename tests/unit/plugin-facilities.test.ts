@@ -1,6 +1,7 @@
 /**
- * 插件宿主设施单测（零依赖、毫秒级）：storage / secrets / deps 探测 /
- * apiVersion 门控 / 斜杠命令注册表。不启 server、不碰网络。
+ * Plugin host facilities unit tests (zero deps, millisecond-scale):
+ * storage / secrets / deps probing / apiVersion gating / slash-command
+ * registry. Does not start a server or touch the network.
  */
 import { describe, expect, it, beforeEach, afterEach } from "vitest";
 import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -19,7 +20,7 @@ function makePlugin(id: string, code: string, manifest?: Record<string, unknown>
 	writeFileSync(join(pdir, "index.mjs"), code);
 }
 
-/** 抓取宿主对象，供断言宿主设施行为。 */
+/** Capture the host object so tests can assert host-facility behavior. */
 async function activate(id: string): Promise<PluginHost> {
 	let host!: PluginHost;
 	makePlugin(
@@ -44,13 +45,13 @@ afterEach(() => {
 });
 
 describe("host.storage", () => {
-	it("get/set/all/delete 往返 + 落盘 <pluginDir>/storage.json", async () => {
+	it("get/set/all/delete round-trip + persist to <pluginDir>/storage.json", async () => {
 		const h = await activate("a");
 		h.storage.set("layout", { split: 0.3 });
 		expect(h.storage.get("layout")).toEqual({ split: 0.3 });
 		expect(h.storage.get("missing", "fallback")).toBe("fallback");
 		expect(Object.keys(h.storage.all())).toContain("layout");
-		// 明文落盘到插件目录，跨实例（重新 load）可读
+		// Plaintext on disk in the plugin dir; readable across instances (reload)
 		expect(existsSync(join(dir, "plugins", "a", "storage.json"))).toBe(true);
 
 		h.storage.set("k", 1);
@@ -60,7 +61,7 @@ describe("host.storage", () => {
 });
 
 describe("host.secrets", () => {
-	it("set/get 往返；明文绝不写进文件；has/list/delete 正常", async () => {
+	it("set/get round-trip; plaintext never written to disk; has/list/delete work", async () => {
 		const h = await activate("b");
 		const secret = "hunter2-super-secret-密码";
 		h.secrets.set("mail_pass", secret);
@@ -69,7 +70,7 @@ describe("host.secrets", () => {
 		expect(h.secrets.list()).toEqual(["mail_pass"]);
 
 		const raw = readFileSync(join(dir, "plugins", "b", "secrets.bin"), "utf8");
-		expect(raw).not.toContain(secret); // 密文形态存在
+		expect(raw).not.toContain(secret); // ciphertext is present
 		expect(raw.length).toBeGreaterThan(50);
 
 		h.secrets.delete("mail_pass");
@@ -77,10 +78,10 @@ describe("host.secrets", () => {
 		expect(h.secrets.has("mail_pass")).toBe(false);
 	});
 
-	it("换了宿主密钥（拷到别的机器）解不开 → fail closed 返回 undefined", async () => {
+	it("wrong host key (copied to another machine) cannot decrypt → fail closed returns undefined", async () => {
 		const h = await activate("c");
 		h.secrets.set("token", "t0psecret");
-		// 同一插件目录、不同 dataDir（= 不同密钥）
+		// Same plugin dir, different dataDir (= different key)
 		const otherDataDir = mkdtempSync(join(tmpdir(), "other-data-"));
 		try {
 			const stolen = new PluginSecrets(otherDataDir, join(dir, "plugins", "c"));
@@ -91,31 +92,31 @@ describe("host.secrets", () => {
 	});
 });
 
-describe("deps 探测", () => {
-	it("isDepAvailable 命中内置模块 / 未安装包返回 false", () => {
+describe("deps probing", () => {
+	it("isDepAvailable hits built-in modules / returns false for uninstalled packages", () => {
 		const pdir = mkdirSync(join(dir, "plugins", "empty"), { recursive: true });
 		expect(isDepAvailable(pdir ?? dir, "node:path")).toBe(true);
 		expect(isDepAvailable(pdir ?? dir, "definitely-not-a-module-xyz")).toBe(false);
 	});
 });
 
-describe("apiVersion 门控", () => {
-	it("manifest apiVersion 高于宿主 → 激活失败并提示升级；低于等于 → 正常激活", async () => {
+describe("apiVersion gating", () => {
+	it("manifest apiVersion above host → activation fails with upgrade hint; at or below → activates", async () => {
 		makePlugin("futuristic", "export default {};", { apiVersion: PLUGIN_API_VERSION + 1 });
 		makePlugin("classic", "export default {};", { apiVersion: 1 });
 		const list = await mgr.ensureLoaded();
-		expect(list.find((p) => p.id === "futuristic")?.error).toContain("请升级 pi-web-ui");
+		expect(list.find((p) => p.id === "futuristic")?.error).toContain("upgrade pi-web-ui");
 		expect(list.find((p) => p.id === "classic")?.error).toBeUndefined();
 	});
 });
 
 describe("host.registerCommand", () => {
-	it("注册 → 目录可见 / findCommand 命中 → 注销后消失", async () => {
+	it("register → visible in catalog / findCommand hits → gone after unregister", async () => {
 		let ran = "";
 		const h = await activate("cmdly");
 		const off = h.registerCommand({
 			name: "deploy",
-			description: "部署当前项目",
+			description: "Deploy the current project",
 			run(args) {
 				ran = args;
 				return `deployed ${args}`;
@@ -129,25 +130,25 @@ describe("host.registerCommand", () => {
 		expect(mgr.findCommand("deploy")).toBeNull();
 	});
 
-	it("跨插件重名拒绝（先注册者胜出）；dispose 清空全部命令", async () => {
+	it("cross-plugin name clash rejected (first registrant wins); dispose clears all commands", async () => {
 		await activate("first");
 		(globalThis as unknown as { __hosts: Record<string, PluginHost> }).__hosts.first.registerCommand({
 			name: "shared",
 			run: () => "first",
 		});
 		const h2 = await activate("second");
-		const off2 = h2.registerCommand({ name: "shared", run: () => "second" }); // 应被拒绝
+		const off2 = h2.registerCommand({ name: "shared", run: () => "second" }); // should be rejected
 		expect(mgr.listCommands()).toHaveLength(1);
 		expect(mgr.findCommand("shared")?.def.run("", { clientId: "" })).toBe("first");
 
-		off2(); // 被拒的注销函数应是空操作
+		off2(); // rejected unregister fn should be a no-op
 		expect(mgr.listCommands()).toHaveLength(1);
 
 		mgr.dispose();
 		expect(mgr.listCommands()).toHaveLength(0);
 	});
 
-	it("非法名称（数字开头 / 空格）被忽略", async () => {
+	it("illegal names (leading digit / spaces) are ignored", async () => {
 		const h = await activate("naughty");
 		h.registerCommand({ name: "1bad", run: () => 1 });
 		h.registerCommand({ name: "has space", run: () => 2 });

@@ -66,14 +66,15 @@ interface SettingsModalProps {
 
 /** A row with an enable/disable switch (skill / extension). */
 /**
- * 「？」悬浮提示：长解释默认不占版面，hover / 键盘聚焦时浮出全文。
- * 靠近视口右缘时自动翻转气泡方向（.flip → 向左展开），避免弹窗超出
- * 容器/窗口被裁掉。
+ * "?" hover tip: long explanations stay off the layout by default and float
+ * out on hover / keyboard focus. Near the right edge of the viewport the
+ * bubble auto-flips (`.flip` → expand left) so it isn't clipped by the
+ * modal / window.
  */
 function HintTip({ text }: { text: string }) {
 	const ref = useRef<HTMLSpanElement>(null);
 	const [flip, setFlip] = useState(false);
-	// 气泡最大 320px；右侧剩余空间不足就向左展开。
+	// Bubble is max 320px; expand left if there isn't enough room on the right.
 	const updateFlip = () => {
 		const rect = ref.current?.getBoundingClientRect();
 		if (rect) setFlip(window.innerWidth - rect.right < 340);
@@ -105,7 +106,7 @@ function ToggleRow({
 }: {
 	title: string;
 	subtitle?: string;
-	/** 长解释走「？」悬浮提示，不再平铺（subtitle 与 tip 二选一）。 */
+	/** Long explanations go through the "?" hover tip instead of being laid out (subtitle XOR tip). */
 	tip?: string;
 	enabled: boolean;
 	onToggle: () => void;
@@ -196,6 +197,15 @@ export function SettingsModal({
 		setIdleMsDraft(String(settings?.terminalBashIdleMs ?? 15000));
 	}, [settings?.terminalBashIdleMs]);
 
+	const [skillPathsDraft, setSkillPathsDraft] = useState(
+		(settings?.additionalSkillPaths ?? []).join("\n"),
+	);
+	const skillPathsFocus = useRef(false);
+	useEffect(() => {
+		if (skillPathsFocus.current) return;
+		setSkillPathsDraft((settings?.additionalSkillPaths ?? []).join("\n"));
+	}, [settings?.additionalSkillPaths]);
+
 	if (!settings) return null;
 
 	const disabledSkills = new Set(settings.disabledSkills);
@@ -217,6 +227,7 @@ export function SettingsModal({
 		visionBridgePrompt?: string;
 		reviewPrompt?: string;
 		reviewDisabledSkills?: string[];
+		additionalSkillPaths?: string[];
 	}) => send({ type: "set_settings", ...patch });
 
 	const toggleSkill = (s: UiSkillInfo) => {
@@ -503,6 +514,31 @@ export function SettingsModal({
 							))}
 						</div>
 					)}
+					<div className="set-field">
+						<label className="set-field-label">
+							{t("additionalSkillPaths")}
+							<HintTip text={t("additionalSkillPathsHint")} />
+						</label>
+						<textarea
+							className="set-prompt-input"
+							rows={3}
+							placeholder={t("additionalSkillPathsPlaceholder")}
+							value={skillPathsDraft}
+							onFocus={() => {
+								skillPathsFocus.current = true;
+							}}
+							onBlur={() => {
+								skillPathsFocus.current = false;
+								const paths = skillPathsDraft
+									.split("\n")
+									.map((line) => line.trim())
+									.filter(Boolean);
+								setSkillPathsDraft(paths.join("\n"));
+								setPartial({ additionalSkillPaths: paths });
+							}}
+							onChange={(e) => setSkillPathsDraft(e.target.value)}
+						/>
+					</div>
 				</div>
 
 				{/* ---- extensions ------------------------------------------------ */}
@@ -556,7 +592,7 @@ export function SettingsModal({
 					)}
 				</div>
 
-				{/* ---- UI plugins（<dataDir>/plugins，纯 UI 隐藏） ----------------- */}
+				{/* ---- UI plugins (<dataDir>/plugins, hide in UI only) ----------------- */}
 				<div className="set-section">
 					<div className="set-section-title">
 						<FiBox className="set-section-icon" />
@@ -617,7 +653,7 @@ export function SettingsModal({
 										</div>
 									}
 								/>
-								{/* 声明式设置：manifest settings schema → 自动渲染表单 */}
+								{/* Declarative settings: manifest settings schema → auto-rendered form */}
 								{p.settingsSchema && p.settingsSchema.length > 0 && (
 									<PluginSettingsForm plugin={p} send={send} />
 								)}

@@ -2,7 +2,7 @@
 	"name": "db-client-plugin",
 	"private": true,
 	"type": "module",
-	"description": "pi-web-ui 数据库连接管理插件（构建用 package.json，不发布；运行时驱动依赖由插件服务端自动安装）",
+	"description": "pi-web-ui database connection plugin (build-only package.json, not published; runtime drivers are auto-installed by the plugin server)",
 	"scripts": {
 		"build": "node build.mjs"
 	},

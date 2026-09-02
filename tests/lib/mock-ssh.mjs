@@ -1,14 +1,14 @@
 /**
- * 内嵌 SSH mock 远端 —— 用 ssh2 自带的 Server 在进程内起一个假 SSH 服务。
+ * In-process SSH mock remote — uses ssh2's built-in Server to start a fake SSH service.
  *
- * 供编辑器插件（vscode-editor，含 Remote-SSH）的协议/UI 测试使用（零外部依赖、离线可跑）：
- * - 认证：用户名 tester / 密码 secret123，其余拒绝
- * - shell：欢迎横幅 welcome-to-mock + 按行回显（输入 foo\r → echo:foo）
- * - exec：
- *     echo xxx   → 输出 xxx、退出码 0
- *     fail*      → stderr "boom"、退出码 7
+ * For vscode-editor (including Remote-SSH) protocol/UI tests (zero extra deps, runs offline):
+ * - auth: user tester / password secret123; everything else is refused
+ * - shell: welcome banner welcome-to-mock + line echo (input foo\r → echo:foo)
+ * - exec:
+ *     echo xxx   → prints xxx, exit 0
+ *     fail*      → stderr "boom", exit 7
  *     pwd        → /home/test
- * - sftp：内存文件系统（见 dirs/files 导出），支持 REALPATH/STAT/OPENDIR/
+ * - sftp: in-memory FS (see dirs/files exports), supports REALPATH/STAT/OPENDIR/
  *   READDIR/OPEN/READ/WRITE/CLOSE/MKDIR/REMOVE/RMDIR/RENAME
  */
 import { join } from "node:path";
@@ -18,13 +18,13 @@ import { gzipSync } from "node:zlib";
 
 const SFTP = { READ: 1, WRITE: 2, APPEND: 4, CREAT: 8, TRUNC: 16, EXCL: 32 };
 
-/** ssh2 运行时依赖子集（离线拷贝用；cpu-features/nan 可选，缺省走纯 JS） */
+/** ssh2 runtime dependency subset (for offline copy; cpu-features/nan optional, falls back to pure JS) */
 const SSH2_PKGS = ["ssh2", "asn1", "bcrypt-pbkdf", "safer-buffer", "tweetnacl"];
 
 /**
- * 给临时插件目录准备 ssh2 依赖：
- * 1. 离线优先——从本地构建目录（dev/plugins/vscode-editor/node_modules）拷贝；
- * 2. 本地没有（如 CI）→ 回退 npm install（需要网络）。
+ * Prepare ssh2 deps in a temp plugin dir:
+ * 1. Offline first — copy from the local build dir (dev/plugins/vscode-editor/node_modules);
+ * 2. If missing locally (e.g. CI) → fall back to npm install (needs network).
  */
 export function ensurePluginSsh2Dep(plugDst, devPlugDir) {
 	for (const pkg of SSH2_PKGS) {
@@ -34,7 +34,7 @@ export function ensurePluginSsh2Dep(plugDst, devPlugDir) {
 		}
 	}
 	if (!existsSync(join(plugDst, "node_modules", "ssh2", "package.json"))) {
-		console.log("[mock-ssh] 本地无 ssh2 依赖，回退 npm install…");
+		console.log("[mock-ssh] no local ssh2 dep, falling back to npm install…");
 		execFileSync(
 			"npm",
 			["install", "--prefix", plugDst, "ssh2@latest", "--no-audit", "--no-fund"],
@@ -42,7 +42,7 @@ export function ensurePluginSsh2Dep(plugDst, devPlugDir) {
 		);
 	}
 	if (!existsSync(join(plugDst, "node_modules", "ssh2", "package.json"))) {
-		throw new Error("ssh2 依赖准备失败（拷贝与 npm install 均未成功）");
+		throw new Error("failed to prepare ssh2 deps (copy and npm install both failed)");
 	}
 }
 
@@ -55,26 +55,26 @@ export const files = {
 	"/home/test/big.bin": Buffer.from([0x00, 0x01, 0x02, 0x00]),
 };
 
-/** 构造 ustar 目录条目（512B 头 + 结束块），供模拟 tar -czf - */
+/** Build a ustar directory entry (512B header + trailer), for simulating tar -czf - */
 function tarDirEntry(name) {
 	const h = Buffer.alloc(512);
 	h.write(name.slice(0, 99), 0, "utf8");
 	h.write("0000755\0", 100);
 	h.write("0000000\0", 108);
 	h.write("0000000\0", 116);
-	h.write("00000000000\0", 124); // 目录 size = 0
+	h.write("00000000000\0", 124); // directory size = 0
 	h.write(Date.now().toString(8).padStart(11, "0") + "\0", 136);
-	h.write("        ", 148); // checksum 先置空格
-	h[156] = 0x35; // '5' 目录
+	h.write("        ", 148); // checksum first filled with spaces
+	h[156] = 0x35; // '5' directory
 	h.write("ustar\0", 257);
 	h.write("00", 263);
 	let sum = 0;
 	for (const b of h) sum += b;
 	h.write(sum.toString(8).padStart(6, "0") + "\0 ", 148);
-	return Buffer.concat([h, Buffer.alloc(1024)]); // 数据区 + 两块结束
+	return Buffer.concat([h, Buffer.alloc(1024)]); // data region + two end blocks
 }
 
-/** 构造 ustar 文件条目（头 + 内容补齐到 512 + 尾部结束块） */
+/** Build a ustar file entry (header + content padded to 512 + trailing end blocks) */
 function tarFileEntry(name, content) {
 	const h = Buffer.alloc(512);
 	h.write(name.slice(0, 99), 0, "utf8");
@@ -84,7 +84,7 @@ function tarFileEntry(name, content) {
 	h.write(content.length.toString(8).padStart(11, "0") + "\0", 124);
 	h.write(Date.now().toString(8).padStart(11, "0") + "\0", 136);
 	h.write("        ", 148);
-	h[156] = 0x30; // '0' 普通文件
+	h[156] = 0x30; // '0' regular file
 	h.write("ustar\0", 257);
 	h.write("00", 263);
 	let sum = 0;
@@ -94,9 +94,9 @@ function tarFileEntry(name, content) {
 }
 
 /**
- * 启动 mock SSH 服务。
- * @param {string} pluginDir 含 node_modules/ssh2 的插件目录（复用同一份依赖）
- * @param {number} port 监听端口
+ * Start the mock SSH server.
+ * @param {string} pluginDir plugin dir that contains node_modules/ssh2 (reuse the same deps)
+ * @param {number} port listen port
  * @returns {Promise<{close(): void}>}
  */
 export async function startMockSsh(pluginDir, port) {
@@ -104,12 +104,12 @@ export async function startMockSsh(pluginDir, port) {
 	const { generateKeyPairSync } = await import("node:crypto");
 	const req = createRequire(join(pluginDir, "package.json"));
 	const { Server } = req("ssh2");
-	// RSA PKCS#1 PEM（ed25519 只能导出 PKCS#8，ssh2 的 parseKey 不认）
+	// RSA PKCS#1 PEM (ed25519 can only export PKCS#8, which ssh2's parseKey rejects)
 	const HOST_KEY = generateKeyPairSync("rsa", { modulusLength: 2048 })
 		.privateKey.export({ type: "pkcs1", format: "pem" });
 
 	let handleSeq = 0;
-	const handles = new Map(); // handleStr → 句柄记录
+	const handles = new Map(); // handleStr → handle record
 
 	function bindSftp(sftp) {
 		sftp.on("REALPATH", (id, path) => {
@@ -151,7 +151,7 @@ export async function startMockSsh(pluginDir, port) {
 				handles.set(h.toString(), { kind: "file", path });
 				return sftp.handle(id, h);
 			}
-			// 写路径：TRUNC 或新文件从空开始，否则续写已有内容
+			// write path: TRUNC or a new file starts empty, otherwise append to existing content
 			const h = Buffer.from(`f${handleSeq++}`);
 			handles.set(h.toString(), {
 				kind: "file", write: true, path,
@@ -208,7 +208,7 @@ export async function startMockSsh(pluginDir, port) {
 				if (parent) parent.splice(parent.indexOf(path.slice(idx + 1)), 1);
 				return sftp.status(id, 0);
 			}
-			sftp.status(id, 4); // 目录非空或不存在
+			sftp.status(id, 4); // directory not empty or missing
 		});
 		sftp.on("RENAME", (id, src, dst) => {
 			if (files[src]) {
@@ -232,7 +232,7 @@ export async function startMockSsh(pluginDir, port) {
 		let srv;
 		try {
 			srv = new Server({ hostKeys: [HOST_KEY] }, (client) => {
-				client.on("error", () => {}); // 客户端断开等 socket 错误不炸测试进程
+				client.on("error", () => {}); // client disconnect / socket errors must not crash the test process
 				client.on("authentication", (ctx) => {
 					if (ctx.username === "tester" && ctx.password === "secret123") return ctx.accept();
 					ctx.reject();
@@ -257,7 +257,7 @@ export async function startMockSsh(pluginDir, port) {
 						session.once("exec", (accept2, reject2, info) => {
 							const stream = accept2();
 							const cmd = info.command ?? "";
-							// 模拟远端 tar -czf -（编辑器插件「下载文件夹到电脑」用）：内存文件系统 → ustar → gzip
+							// Simulate remote tar -czf - (editor plugin "download folder to computer"): in-memory FS → ustar → gzip
 							const tarM = cmd.match(/^cd '(.*)' && tar -czf - '(.*)'$/);
 							if (tarM) {
 								const base = (tarM[1] === "/" ? "" : tarM[1]) + "/" + tarM[2];

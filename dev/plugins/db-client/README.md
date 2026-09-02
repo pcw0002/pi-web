@@ -1,71 +1,79 @@
-# db-client —— 数据库连接管理插件
+# db-client — database connection plugin
 
-pi-web-ui 界面插件，类似 [vscode-database-client](https://github.com/cweijan/vscode-database-client)
-的网页版精简体验：连接管理 + 库表树浏览 + 表结构查看 + 数据分页浏览 + SQL 查询编辑器。
+A pi-web-ui UI plugin, a slim web version of
+[vscode-database-client](https://github.com/cweijan/vscode-database-client):
+connection management + schema tree + table structure + paginated data browse + SQL
+query editor.
 
-## 支持的数据库
+## Supported databases
 
-| 类型 | 驱动 | 默认端口 | 说明 |
+| Type | Driver | Default port | Notes |
 | --- | --- | --- | --- |
-| MySQL / MariaDB | mysql2 | 3306 | 库/表/视图、列+索引+DDL（SHOW CREATE TABLE）、分页排序、SQL |
-| PostgreSQL | pg | 5432 | public schema 表/物化视图/普通视图、主键/索引、跨库切换浏览、SQL |
-| SQLite | node:sqlite（内置） | —（文件路径） | 打开本地 .db 文件，零额外依赖；PRAGMA 结构、分页、SQL、行编辑（≥ Node 22.13） |
-| SQL Server | mssql | 1433 | 自动探测 schema、OFFSET/FETCH 分页、SQL |
-| MongoDB | mongodb | 27017 | 库/集合树、文档分页（JSON 过滤条件如 `{"age":{"$gt":18}}`）、索引；不支持 SQL |
-| Redis | ioredis | 6379 | 键模式扫描、键详情（类型/TTL/大小/值预览）、原始命令行 |
+| MySQL / MariaDB | mysql2 | 3306 | DBs/tables/views, columns+indexes+DDL (`SHOW CREATE TABLE`), paginated sort, SQL |
+| PostgreSQL | pg | 5432 | public-schema tables/materialized/ordinary views, PK/indexes, cross-db browse, SQL |
+| SQLite | node:sqlite (built-in) | — (file path) | Open a local .db file, no extra deps; PRAGMA schema, paging, SQL, row edit (≥ Node 22.13) |
+| SQL Server | mssql | 1433 | Auto-detect schema, OFFSET/FETCH paging, SQL |
+| MongoDB | mongodb | 27017 | DB/collection tree, document paging (JSON filter e.g. `{"age":{"$gt":18}}`), indexes; no SQL |
+| Redis | ioredis | 6379 | Key-pattern scan, key detail (type/TTL/size/value preview), raw command line |
 
-驱动依赖**不随包分发**：首次激活自动 `npm install` 到插件目录（也可点左栏「安装驱动」手动触发）。
-只装了部分驱动也能用对应类型，未装的类型在连接时报友好提示。
+Drivers are **not shipped** with the package: first activate runs `npm install` into the
+plugin directory (or click "Install drivers" in the left pane). Partially installed
+drivers still work for those types; missing types get a friendly error on connect.
 
-## 安装 / 卸载 / 更新
+## Install / uninstall / update
 
 ```bash
-# ── 安装 ──
+# ── Install ──
 pi-web-ui install https://github.com/xing-shuyin/pi-web-ui/tree/main/dev/plugins/db-client
-pi-web-ui install dev/plugins/db-client      # 或本地目录（开发态）
-# 可选：--data-dir <dir> 自定义数据目录（默认 ~/.pi-web）
+pi-web-ui install dev/plugins/db-client      # or a local directory (dev)
+# optional: --data-dir <dir> custom data directory (default ~/.pi-web)
 
-# ── 查看 ──
-pi-web-ui plugins                            # 列出已装插件与 id
+# ── List ──
+pi-web-ui plugins                            # list installed plugins and ids
 
-# ── 更新 ──
+# ── Update ──
 pi-web-ui install https://github.com/xing-shuyin/pi-web-ui/tree/main/dev/plugins/db-client --force
-                                             # --force 覆盖重装即更新
-                                             # ⚠ 先备份插件目录里的 db-connections.json（连接凭据）
+                                             # --force overwrites = update
+                                             # ⚠ back up db-connections.json in the plugin dir (connection creds)
 
-cp -r dev/plugins/db-client ~/.pi-web/plugins/  # 本地开发态：改完 src 后先 npm run build 再拷贝
+cp -r dev/plugins/db-client ~/.pi-web/plugins/  # local dev: npm run build after src changes, then copy
                                              # Windows: %USERPROFILE%\.pi-web\plugins\db-client
 
-# ── 卸载 ──
-pi-web-ui uninstall db-client                # 移除插件目录（db-connections.json 一并删除）
-# 手动方式：rm -rf ~/.pi-web/plugins/db-client
+# ── Uninstall ──
+pi-web-ui uninstall db-client                # removes the plugin dir (including db-connections.json)
+# manual: rm -rf ~/.pi-web/plugins/db-client
 ```
 
-刷新浏览器即生效（顶栏出现 🗄️ 标签页）。
+Refresh the browser to apply (a 🗄️ tab appears in the top bar).
 
-## 功能
+## Features
 
-- **连接管理**：新建 / 编辑 / 删除 / 测试连接；凭据明文存本机 `<dataDir>/plugins/db-client/db-connections.json`，回显脱敏
-- **多连接并存**：最多同时打开 8 个，互不干扰，断线自动提示
-- **数据浏览**：分页（首页/上下页/末页）、点击列头排序、NULL 弱化显示、行数统计（大表用估算行数）
-- **结构查看**：列清单（类型/可空/主键/默认值/备注）、索引、DDL 文本
-- **SQL 编辑器**：Ctrl/Cmd+Enter 运行，显示耗时与影响行数，结果表格化
-- **MongoDB**：集合浏览 + JSON 过滤条件分页查文档
-- **行编辑**：双击单元格直接改值（Enter 提交 / Esc 取消）、悬停删除单行、「＋ 新增行」表单；
-  无主键的 SQLite 表自动用 rowid 定位；输入 NULL（大写）表示写入 SQL NULL
-- **MongoDB 编辑**：文档 JSON 可视化编辑（✎）/ 删除 / 新增；_id 十六进制字符串自动还原 ObjectId
-- **Redis 编辑**：字符串键值在线修改保存
-- **Redis**：pattern 扫描键列表、TTL/类型徽标、值按类型渲染（string/hash/list/set/zset/stream）、任意原始命令
+- **Connection management**: new / edit / delete / test; credentials stored locally in
+  `<dataDir>/plugins/db-client/db-connections.json`, echoed back redacted
+- **Multiple connections**: up to 8 open at once, isolated; disconnects are notified
+- **Data browse**: paging (first/prev/next/last), click column headers to sort, NULL
+  shown muted, row counts (large tables use estimated counts)
+- **Structure**: column list (type/nullable/PK/default/comment), indexes, DDL text
+- **SQL editor**: Ctrl/Cmd+Enter to run, shows elapsed time and affected rows, tabular results
+- **MongoDB**: collection browse + JSON-filter paginated documents
+- **Row edit**: double-click a cell to change it (Enter commits / Esc cancels), hover to
+  delete a row, "＋ New row" form; SQLite tables without a PK use rowid; type NULL
+  (uppercase) to write SQL NULL
+- **MongoDB edit**: visual JSON document edit (✎) / delete / insert; hex `_id` strings
+  are restored as ObjectId
+- **Redis edit**: online edit/save of string key values
+- **Redis**: pattern-scan key list, TTL/type badges, values rendered by type
+  (string/hash/list/set/zset/stream), arbitrary raw commands
 
-## 协议
+## Protocol
 
-上行 `{ action, reqId, ... }`，下行响应 `{ res: true, reqId, ok, ... }`（reqId 匹配）；
-事件 `{ event: "conn_closed", ... }` 定向推送；状态广播 `{ kind: "state", state }`。
-详见 `index.mjs` 头部注释。
+Upstream `{ action, reqId, ... }`, downstream `{ res: true, reqId, ok, ... }` (matched by
+reqId); events `{ event: "conn_closed", ... }` are sent to the creator; state broadcast
+`{ kind: "state", state }`. See the header comment in `index.mjs`.
 
-## 回归测试
+## Regression tests
 
 ```bash
 npm run build:server
-node tests/db-client-test.mjs   # 端口 8968，SQLite 全链路协议测试（零 token 零依赖，已进 run-smoke 清单）
+node tests/db-client-test.mjs   # port 8968, SQLite end-to-end protocol test (zero token, zero extra deps; in the smoke list)
 ```

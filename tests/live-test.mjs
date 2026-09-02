@@ -1,16 +1,16 @@
 /**
- * live-test.mjs — 纯 WebSocket 层端到端冒烟测试（不走浏览器）。
+ * live-test.mjs — pure WebSocket-layer end-to-end smoke (no browser).
  *
- * 验证：hello → ready → set_cwd → read_file（文本预览）→ 媒体 /api/file → 结束
+ * Verifies: hello → ready → set_cwd → read_file (text preview) → media /api/file → done
  *
- * 用法（需先有 server 在跑，或用环境变量指定）:
- *   node live-test.mjs                              # 连 ws://localhost:${PORT:-8787}
- *   PORT=9000 node live-test.mjs                    # 自定义端口
- *   WS_CWD=/path/node live-test.mjs                 # set_cwd 目标（默认当前目录）
- *   WS_READ=sub/dir/file.txt  node live-test.mjs    # read_file 的路径
- *   WS_MEDIA=sub/dir/pic.jpg  node live-test.mjs    # 可选：媒体文件，用于验证 /api/file 下载
+ * Usage (needs a server already running, or set via env):
+ *   node live-test.mjs                              # connect ws://localhost:${PORT:-8787}
+ *   PORT=9000 node live-test.mjs                    # custom port
+ *   WS_CWD=/path/node live-test.mjs                 # set_cwd target (default: cwd)
+ *   WS_READ=sub/dir/file.txt  node live-test.mjs    # path for read_file
+ *   WS_MEDIA=sub/dir/pic.jpg  node live-test.mjs    # optional media file, to verify /api/file download
  *
- * clientId 随机生成，不依赖特定项目，便于反复跑。
+ * clientId is random; does not depend on a specific project, so it is easy to re-run.
  */
 import { randomUUID } from "node:crypto";
 import WebSocket from "ws";
@@ -54,7 +54,7 @@ ws.on("message", async (d) => {
 			const buf = Buffer.from(await r.arrayBuffer());
 			log("bytes:", buf.length, "magic:", buf.subarray(0, 4).toString("hex"));
 		} else {
-			log("WS_MEDIA 未设置，跳过媒体下载探测");
+			log("WS_MEDIA not set, skipping media download probe");
 		}
 		ws.close();
 		process.exit(0);

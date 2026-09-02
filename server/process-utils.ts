@@ -1,7 +1,9 @@
 /**
- * process-utils — 跨平台进程工具：监听端口快照、进程树查杀、进程名查询。
- * 后台任务面板（bgServers）用它们检测/停止 agent 在后台拉起的服务。
- * 从 agent-service.ts 抽出，行为保持不变。全平台 best-effort：失败静默。
+ * process-utils — cross-platform process helpers: listening-port snapshots,
+ * process-tree kill, process-name lookup. The background-tasks panel
+ * (bgServers) uses them to detect/stop services the agent started in the
+ * background. Extracted from agent-service.ts with behavior unchanged.
+ * Best-effort on every platform: failures are silent.
  */
 
 /**

@@ -14,7 +14,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { WebSocket } from "ws";
-// fileURLToPath: URL.pathname 在 Windows 下是 /E:/... 形式，直接当 cwd 会失败
+// fileURLToPath: URL.pathname on Windows is /E:/...; using it as cwd directly fails
 const REPO_ROOT = fileURLToPath(new globalThis.URL("../", import.meta.url));
 
 const PORT = 8793;
@@ -32,6 +32,9 @@ const NATIVE_NAMES = [
 	"cwd",
 	"thinking",
 	"resume",
+	"name",
+	"tree",
+	"export",
 	"help",
 	"copy",
 ];
@@ -105,11 +108,11 @@ async function main() {
 		env: {
 			...process.env,
 			PORT: String(PORT),
-			// 仓库根本身当工作区（跨平台）；隔离 client-state
+			// repo root as the workspace (cross-platform); isolate client-state
 			PI_WEB_CWD: REPO_ROOT,
 			PI_WEB_DATA_DIR: mkdtempSync(join(tmpdir(), "piweb-slash-")),
-			// 隔离 agent 目录（无会话历史）——复现 CI 的空环境，防止本机
-			// 真实 ~/.pi/agent 里的历史会话掩盖 snapshot/delta 时序差异。
+			// isolate the agent dir (no session history) — reproduce CI's empty env so a local
+			// real ~/.pi/agent history cannot mask snapshot/delta timing differences.
 			PI_CODING_AGENT_DIR: mkdtempSync(join(tmpdir(), "piweb-slash-agent-")),
 		},
 		stdio: "ignore",
@@ -153,34 +156,34 @@ async function main() {
 	}
 	console.log(`[2] get_commands re-request: ${cat2.commands.length} commands`);
 
-	// --- 3. native /cwd (valid + invalid) --- 跨平台：用临时目录而非 mac 专属的 /tmp
+	// --- 3. native /cwd (valid + invalid) --- cross-platform: use a temp dir, not mac-only /tmp
 	const TMP_CWD = mkdtempSync(join(tmpdir(), "slash-cwd-"));
 	const norm = (p) => p.replace(/\\/g, "/");
 	c.send({ type: "prompt", text: `/cwd ${TMP_CWD}` });
-	// 协议 v2：动作后的快照可能是全量 snapshot，也可能是 snapshot_delta
-	// （light state 同样携带 cwd）——两者都必须接受（见 conv-cwd-test 写法）。
+	// protocol v2: the post-action snapshot may be a full snapshot or a snapshot_delta
+	// (light state also carries cwd) — both must be accepted (see conv-cwd-test).
 	await c.wait(
 		(m) =>
 			(m.type === "snapshot" || m.type === "snapshot_delta") &&
 			norm(m.state?.cwd) === norm(TMP_CWD),
 	);
 	const cwdOk = await c.wait((m) => m.type === "notice", 6000).catch(() => null);
-	if (!cwdOk || !cwdOk.text.includes("已切换到工作目录")) {
+	if (!cwdOk || !cwdOk.text.includes("Switched workspace to")) {
 		throw new Error("FAIL: /cwd valid path did not switch workspace");
 	}
 	console.log(`[3] /cwd valid → ${cwdOk.text}`);
 
 	c.send({ type: "prompt", text: "/cwd /nonexistent-zzz" });
 	const cwdBad = await c.wait((m) => m.type === "notice", 6000);
-	if (!cwdBad.text.includes("切换工作目录失败")) {
+	if (!cwdBad.text.includes("Failed to switch workspace")) {
 		throw new Error("FAIL: /cwd invalid path should notice an error");
 	}
 	console.log(`[4] /cwd invalid → ${cwdBad.text}`);
 
 	// --- 4. native /model with no match ---
-	c.send({ type: "prompt", text: "/model 这个模型必然不存在xyz" });
+	c.send({ type: "prompt", text: "/model this-model-definitely-does-not-exist-xyz" });
 	const modelBad = await c.wait((m) => m.type === "notice", 6000);
-	if (!modelBad.text.includes("没有匹配到模型")) {
+	if (!modelBad.text.includes("No matching model")) {
 		throw new Error("FAIL: /model no-match should notice an error");
 	}
 	console.log(`[5] /model no-match → ${modelBad.text}`);
@@ -188,7 +191,7 @@ async function main() {
 	// --- 5. native /help is swallowed (no prompt-send failure) ---
 	c.send({ type: "prompt", text: "/help" });
 	const leak = await c.wait(
-		(m) => m.type === "notice" && m.text.includes("提示发送失败"),
+		(m) => m.type === "notice" && m.text.includes("Failed to send prompt"),
 		3000,
 	).catch(() => null);
 	if (leak) {
@@ -211,7 +214,7 @@ async function main() {
 		20000,
 	);
 	const reloadNotice = await c.wait((m) => m.type === "notice", 8000);
-	if (!reloadNotice.text.includes("已重新加载")) {
+	if (!reloadNotice.text.includes("Reloaded")) {
 		throw new Error(`FAIL: /reload notice unexpected: ${reloadNotice.text}`);
 	}
 	const namesAfterReload = new Set(catReloaded.commands.map((x) => x.name));

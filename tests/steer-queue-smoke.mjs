@@ -1,6 +1,6 @@
-// 协议冒烟：prompt.queue 字段从 dispatch → AgentService.prompt() 无损传递。
-// 无 token：不真正触发模型；只验证带 queue 的 prompt 消息能被接收、参数不炸
-// （签名不匹配会抛 TypeError → 服务端发"提示发送失败"notice 也会带 crash 特征）。
+// Protocol smoke: prompt.queue is passed losslessly from dispatch → AgentService.prompt().
+// No token: do not actually invoke a model; only verify a queued prompt is received and args do not explode
+// (a signature mismatch would throw TypeError → the server "failed to send prompt" notice would also look like a crash).
 import { portUp, freePort } from "./lib/port-utils.mjs";
 import { spawn, execSync } from "node:child_process";
 import { mkdtempSync, rmSync, mkdirSync, writeFileSync } from "node:fs";
@@ -66,18 +66,18 @@ try {
 	await connect();
 	await sleep(400);
 
-	// 1) 带 queue=true 的 prompt —— 验证 dispatch 传参不炸（无模型会报"提示发送失败"，可接受）
+	// 1) prompt with queue=true — verify dispatch args do not explode (no model → "failed to send prompt" is acceptable)
 	ws.send(
-		JSON.stringify({ type: "prompt", text: "冒烟：queue 字段传递", queue: true, attachments: [] }),
+		JSON.stringify({ type: "prompt", text: "smoke: queue field passthrough", queue: true, attachments: [] }),
 	);
 	await sleep(800);
 
-	// 2) 不带 queue 的 prompt —— 验证默认参数路径
-	ws.send(JSON.stringify({ type: "prompt", text: "冒烟：无 queue 字段", attachments: [] }));
+	// 2) prompt without queue — verify the default-args path
+	ws.send(JSON.stringify({ type: "prompt", text: "smoke: no queue field", attachments: [] }));
 	await sleep(800);
 
 	console.log(
-		"OK: prompt(queue) 消息被服务端正常接收，dispatch/签名无异常（无模型时按预期提示发送失败）",
+		"OK: prompt(queue) was received by the server; dispatch/signature did not throw (failed-to-send is expected with no model)",
 	);
 	ok = true;
 } catch (err) {
@@ -86,8 +86,8 @@ try {
 	try {
 		ws?.close();
 	} catch {}
-	// 先杀 server 并等端口释放再退出 —— process.exit 会跳过 finally，
-	// 曾经导致每次运行泄漏一个 server（下次跑报 "port busy — abort"）。
+	// kill the server and wait for the port to free before exiting — process.exit skips finally,
+	// which used to leak a server every run (next run reported "port busy — abort").
 	server?.kill("SIGTERM");
 	for (let i = 0; i < 20; i++) {
 		await sleep(250);

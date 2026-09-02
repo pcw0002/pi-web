@@ -1,22 +1,22 @@
 /**
- * db-client 插件服务端 —— 数据库连接管理/浏览后端（参照 vscode-database-client 的核心体验）。
+ * db-client plugin server — database connection manager / browser backend (vscode-database-client-like).
  *
- * 依赖驱动不随包分发：首次激活自动 npm 一次性安装
- * mysql2 / pg / better-sqlite3 / mssql / mongodb / ioredis 到插件目录（同 ssh/webmail 模式）。
+ * driver packages are not shipped with the plugin：auto on first activate npm one-shot install
+ * mysql2 / pg / better-sqlite3 / mssql / mongodb / ioredis into the plugin directory (same pattern as ssh/webmail).
  *
- * 职责：
- * - 连接配置 CRUD（存 conn.dir/db-connections.json，明文本机；回显脱敏只报 hasPass）
- * - 连接池：connId → 适配器实例；事件定向推给创建者 socket
- * - 统一适配器接口（按数据库类型分流）：
+ * Responsibilities：
+ * - connection config CRUD (conn.dir/db-connections.json, plaintext on this machine; echo only reports hasPass)
+ * - connection pool：connId → adapter instance；events are sent only to the creator socket
+ * - unified adapter interface（dispatch by database type）：
  *     listDatabases() / listTables(db) / describeTable(db,table)
  *     selectPage(db,table,{offset,limit,orderBy,dir,filter}) / query(db,sql)
- *   SQL 系（mysql/postgres/sqlserver/sqlite）走 SQL；mongodb 走 find+JSON 过滤；
- *   redis 单独一组动作（scan/key/del/原始命令）。
+ *   SQL engines (mysql/postgres/sqlserver/sqlite) use SQL; mongodb uses find + JSON filter;
+ *   redis has its own actions (scan/key/del/raw command).
  *
- * 协议：上行 { action, reqId?, ... }；下行两类——
- *   响应 { res: true, reqId, ok, ... }（reqId 匹配）
- *   事件  { event: "conn_closed", ... }（sendTo 创建者）
- *   广播  { kind: "state", state }（连接列表 / 运行中连接 / 依赖状态，凭据脱敏）
+ * Protocol: uplink { action, reqId?, ... }; two downlink kinds —
+ *   response { res: true, reqId, ok, ... } (matched by reqId)
+ *   event { event: "conn_closed", ... } (sendTo creator)
+ *   broadcast { kind: "state", state } (connection list / live connections / dep status, credentials redacted)
  */
 
 import { join } from "node:path";
@@ -27,13 +27,13 @@ import { readFile as rf, writeFile as wf } from "node:fs/promises";
 
 const CONFIG_FILE = "db-connections.json";
 const DEPS = ["mysql2@^3", "pg@^8", "mssql@^12", "mongodb@^7", "ioredis@^6"];
-const MAX_CONNS = 32; // 连接配置上限
-const MAX_RUNTIME = 8; // 同时打开的连接数
-const OP_TIMEOUT_MS = 30_000; // 单次查询超时
+const MAX_CONNS = 32; // connection-config cap
+const MAX_RUNTIME = 8; // concurrent open connections
+const OP_TIMEOUT_MS = 30_000; // per-query timeout
 const CONNECT_TIMEOUT_MS = 15_000;
 const MAX_PAGE_ROWS = 500;
 const MAX_QUERY_ROWS = 1000;
-const MAX_CELL_LEN = 4000; // 单元格序列化截断
+const MAX_CELL_LEN = 4000; // cell serialization truncation
 
 export const DB_TYPES = {
 	mysql: { label: "MySQL", port: 3306 },
@@ -45,23 +45,23 @@ export const DB_TYPES = {
 };
 
 // ---------------------------------------------------------------------------
-// 小工具
+// helpers
 // ---------------------------------------------------------------------------
 
 function withTimeout(promise, ms, label) {
 	return Promise.race([
 		promise,
-		new Promise((_, rej) => setTimeout(() => rej(new Error(`${label ?? "操作"}超时（${ms / 1000}s）`)), ms)),
+		new Promise((_, rej) => setTimeout(() => rej(new Error(`${label ?? "operation"}timed out（${ms / 1000}s）`)), ms)),
 	]);
 }
 
-/** 标识符方言引用（防注入：标识符一律过引号函数） */
+/** dialect identifier quoting (injection-safe: always quote) */
 function qMysql(s) { return "`" + String(s).replace(/`/g, "``") + "`"; }
 function qPg(s) { return '"' + String(s).replace(/"/g, '""') + '"'; }
 function qMssql(s) { return "[" + String(s).replace(/\]/g, "]]") + "]"; }
 function qSqlite(s) { return '"' + String(s).replace(/"/g, '""') + '"'; }
 
-/** 值统一序列化成可展示的 JSON 兼容标量 */
+/** serialize values uniformly into displayable JSON compatible scalars */
 function cellVal(v) {
 	if (v === null || v === undefined) return null;
 	if (typeof v === "number" || typeof v === "boolean") return v;
@@ -98,15 +98,15 @@ function parseJsonFilter(text) {
 	if (!t) return {};
 	try {
 		const obj = JSON.parse(t);
-		if (!obj || typeof obj !== "object" || Array.isArray(obj)) throw new Error("过滤条件必须是 JSON 对象");
+		if (!obj || typeof obj !== "object" || Array.isArray(obj)) throw new Error("Filter must be a JSON object");
 		return obj;
 	} catch (e) {
-		throw new Error(`过滤条件 JSON 解析失败：${e.message}`);
+		throw new Error(`Failed to parse filter JSON：${e.message}`);
 	}
 }
 
 // ---------------------------------------------------------------------------
-// 适配器工厂 —— 每种数据库一个 async 工厂，返回统一接口 + kind
+// Adapter factory — one async factory per database, returns the unified interface + kind
 // ---------------------------------------------------------------------------
 
 async function mysqlAdapter(cfg) {
@@ -119,7 +119,7 @@ async function mysqlAdapter(cfg) {
 		password: cfg.password || undefined,
 		connectTimeout: CONNECT_TIMEOUT_MS,
 		dateStrings: true,
-	}), CONNECT_TIMEOUT_MS + 3000, "建立连接");
+	}), CONNECT_TIMEOUT_MS + 3000, "connect");
 	await conn.ping();
 	let curDb = null;
 	async function useDb(db) {
@@ -155,7 +155,7 @@ async function mysqlAdapter(cfg) {
 			try {
 				const [[row]] = await conn.query(`SHOW CREATE TABLE ${qMysql(db)}.${qMysql(t)}`);
 				ddl = row["Create Table"] ?? row["Create View"] ?? "";
-			} catch { /* 视图等场景失败可忽略 */ }
+			} catch { /* failures in view-like cases can be ignored */ }
 			return {
 				columns: cols.map((c) => ({
 					name: c.name, type: c.type, nullable: c.nullable === "YES",
@@ -166,7 +166,7 @@ async function mysqlAdapter(cfg) {
 			};
 		},
 		async selectPage(db, t, opt) {
-			// mysql 数据页不支持 JSON filter（那是 mongodb 专属参数）
+			// mysql Data tab has no JSON filter (that is a mongodb-only parameter)
 			const totalRes = await conn.query(`SELECT COUNT(*) AS n FROM ${qMysql(db)}.${qMysql(t)}`);
 			const total = Number(totalRes[0][0]?.n ?? 0);
 			const orderSql = opt.orderBy ? ` ORDER BY ${qMysql(opt.orderBy)} ${opt.dir === "desc" ? "DESC" : "ASC"}` : "";
@@ -186,7 +186,7 @@ async function mysqlAdapter(cfg) {
 			const started = Date.now();
 			const [result] = await conn.query(sql);
 			if (Array.isArray(result)) {
-				// SELECT 结果集
+				// SELECT result set
 				const fields = result.length ? Object.keys(result[0]) : [];
 				return { total: result.length, affected: 0, elapsedMs: Date.now() - started, ...rowsToGrid(fields, result) };
 			}
@@ -194,7 +194,7 @@ async function mysqlAdapter(cfg) {
 		},
 		async updateRow(db, t, pkCol, pkVal, changes) {
 			const cols = Object.keys(changes);
-			if (!cols.length) throw new Error("没有要修改的列");
+			if (!cols.length) throw new Error("No columns to update");
 			const [r] = await conn.query(
 				`UPDATE ${qMysql(db)}.${qMysql(t)} SET ${cols.map((c) => `${qMysql(c)}=?`).join(", ")} WHERE ${qMysql(pkCol)}=?`,
 				[...Object.values(changes), pkVal]);
@@ -202,7 +202,7 @@ async function mysqlAdapter(cfg) {
 		},
 		async insertRow(db, t, values) {
 			const cols = Object.keys(values);
-			if (!cols.length) throw new Error("没有可插入的列（全部留空）");
+			if (!cols.length) throw new Error("No columns to insert (all left blank)");
 			const [r] = await conn.query(
 				`INSERT INTO ${qMysql(db)}.${qMysql(t)} (${cols.map(qMysql).join(", ")}) VALUES (${cols.map(() => "?").join(", ")})`,
 				Object.values(values));
@@ -233,7 +233,7 @@ async function postgresAdapter(cfg) {
 		let c = clients.get(name);
 		if (c) return c;
 		c = new Client({ ...base, database: name });
-		await withTimeout(c.connect(), CONNECT_TIMEOUT_MS + 3000, "建立连接");
+		await withTimeout(c.connect(), CONNECT_TIMEOUT_MS + 3000, "connect");
 		clients.set(name, c);
 		return c;
 	}
@@ -311,7 +311,7 @@ async function postgresAdapter(cfg) {
 		},
 		async updateRow(db, t, pkCol, pkVal, changes) {
 			const cols = Object.keys(changes);
-			if (!cols.length) throw new Error("没有要修改的列");
+			if (!cols.length) throw new Error("No columns to update");
 			const c = await getCli(db);
 			const sets = cols.map((col, i) => `${qPg(col)}=$${i + 1}`).join(", ");
 			const r = await c.query(
@@ -321,7 +321,7 @@ async function postgresAdapter(cfg) {
 		},
 		async insertRow(db, t, values) {
 			const cols = Object.keys(values);
-			if (!cols.length) throw new Error("没有可插入的列（全部留空）");
+			if (!cols.length) throw new Error("No columns to insert (all left blank)");
 			const c = await getCli(db);
 			const ph = cols.map((_, i) => `$${i + 1}`).join(", ");
 			const r = await c.query(
@@ -339,21 +339,21 @@ async function postgresAdapter(cfg) {
 }
 
 async function sqliteAdapter(cfg) {
-	if (!cfg.file || !String(cfg.file).trim()) throw new Error("SQLite 需要指定数据库文件路径");
-	if (!existsSync(String(cfg.file).trim())) throw new Error(`数据库文件不存在：${cfg.file}`);
-	// 用 Node 内置 node:sqlite（≥22.13 无需 flag），零原生依赖；可写打开（支持行编辑）
+	if (!cfg.file || !String(cfg.file).trim()) throw new Error("SQLite requires a database file path");
+	if (!existsSync(String(cfg.file).trim())) throw new Error(`Database file does not exist：${cfg.file}`);
+	// Use Node built-in node:sqlite (≥22.13, no flag); zero native deps; open writable (row edits)
 	const mod = await import("node:sqlite");
 	const DatabaseSync = mod.DatabaseSync ?? mod.default?.DatabaseSync;
-	if (!DatabaseSync) throw new Error("当前 Node 不支持 node:sqlite（需 ≥22.13）");
+	if (!DatabaseSync) throw new Error("This Node build has no node:sqlite (need ≥22.13)");
 	const db = new DatabaseSync(String(cfg.file).trim());
 	function all(sql, ...args) { return db.prepare(sql).all(...args); }
-	// 主键探测缓存：有 INTEGER/复合主键用之；无主键表回退 rowid（查询时以 __rid__ 列带出）
+	// PK probe cache: INTEGER/composite PK if present; tables without a PK fall back to rowid (__rid__ column)
 	const pkCache = new Map();
 	function tablePk(t) {
 		if (pkCache.has(t)) return pkCache.get(t);
 		const info = all(`PRAGMA table_info(${qSqlite(t)})`);
 		const pks = info.filter((c) => Number(c.pk) > 0);
-		const col = pks.length === 1 ? pks[0].name : null; // 复合主键不支持行级定位
+		const col = pks.length === 1 ? pks[0].name : null; // composite PKs cannot locate a row
 		pkCache.set(t, col);
 		return col;
 	}
@@ -406,7 +406,7 @@ async function sqliteAdapter(cfg) {
 		},
 		async updateRow(_db, t, pkCol, pkVal, changes) {
 			const cols = Object.keys(changes);
-			if (!cols.length) throw new Error("没有要修改的列");
+			if (!cols.length) throw new Error("No columns to update");
 			const info = db.prepare(
 				`UPDATE ${qSqlite(t)} SET ${cols.map(qSqlite).map((c, i) => `${c}=?`).join(", ")} WHERE ${qSqlite(pkCol)}=?`
 			).run(...Object.values(changes), pkVal);
@@ -414,7 +414,7 @@ async function sqliteAdapter(cfg) {
 		},
 		async insertRow(_db, t, values) {
 			const cols = Object.keys(values);
-			if (!cols.length) throw new Error("没有可插入的列（全部留空）");
+			if (!cols.length) throw new Error("No columns to insert (all left blank)");
 			const info = db.prepare(
 				`INSERT INTO ${qSqlite(t)} (${cols.map(qSqlite).join(", ")}) VALUES (${cols.map(() => "?").join(", ")})`
 			).run(...Object.values(values));
@@ -447,13 +447,13 @@ async function mssqlAdapter(cfg) {
 		let p = pools.get(name);
 		if (p) return p;
 		p = new mssql.ConnectionPool({ ...baseCfg, database: name });
-		await withTimeout(p.connect(), CONNECT_TIMEOUT_MS + 5000, "建立连接");
+		await withTimeout(p.connect(), CONNECT_TIMEOUT_MS + 5000, "connect");
 		pools.set(name, p);
 		return p;
 	}
 	const main = await getPool(baseCfg.database);
 	async function qual(db, t) {
-		// 查真实 schema，避免写死 dbo
+		// look up the real schema，avoid hard-coding dbo
 		const r = await (await getPool(db)).request()
 			.input("t", mssql.VarChar(256), t)
 			.query(`SELECT TOP 1 OBJECT_SCHEMA_NAME(object_id) AS s FROM ${qMssql(db)}.sys.objects WHERE name=@t AND type IN ('U','V')`);
@@ -527,7 +527,7 @@ async function mssqlAdapter(cfg) {
 		},
 		async updateRow(db, t, pkCol, pkVal, changes) {
 			const cols = Object.keys(changes);
-			if (!cols.length) throw new Error("没有要修改的列");
+			if (!cols.length) throw new Error("No columns to update");
 			const pool = await getPool(db);
 			const fq = await qual(db, t);
 			const req = pool.request().input("pk", pkVal);
@@ -538,7 +538,7 @@ async function mssqlAdapter(cfg) {
 		},
 		async insertRow(db, t, values) {
 			const cols = Object.keys(values);
-			if (!cols.length) throw new Error("没有可插入的列（全部留空）");
+			if (!cols.length) throw new Error("No columns to insert (all left blank)");
 			const pool = await getPool(db);
 			const fq = await qual(db, t);
 			const req = pool.request();
@@ -566,7 +566,7 @@ async function mongoAdapter(cfg) {
 		url = `mongodb://${auth}${cfg.host || "127.0.0.1"}:${Number(cfg.port) || 27017}/${cfg.database ? encodeURIComponent(cfg.database) : ""}`;
 	}
 	const client = new MongoClient(url, { serverSelectionTimeoutMS: CONNECT_TIMEOUT_MS });
-	await withTimeout(client.connect(), CONNECT_TIMEOUT_MS + 3000, "建立连接");
+	await withTimeout(client.connect(), CONNECT_TIMEOUT_MS + 3000, "connect");
 	return {
 		kind: "mongodb",
 		dialect: "mongo",
@@ -581,7 +581,7 @@ async function mongoAdapter(cfg) {
 			const coll = client.db(db).collection(t);
 			let indexes = [];
 			try { indexes = (await coll.listIndexes().toArray()).map((i) => ({ name: i.name, unique: Boolean(i.unique), columns: JSON.stringify(i.key) })); } catch { /* ignore */ }
-			return { columns: [], indexes, ddl: `集合 ${db}.${t}（文档型无固定结构，请到「数据」页浏览）` };
+			return { columns: [], indexes, ddl: `Collection ${db}.${t}（document store has no fixed schema，go to the「Data」tab to browse）` };
 		},
 		async selectPage(db, t, opt) {
 			const coll = client.db(db).collection(t);
@@ -591,7 +591,7 @@ async function mongoAdapter(cfg) {
 				.skip(Math.max(Number(opt.offset) || 0, 0))
 				.limit(Math.min(Number(opt.limit) || 50, MAX_PAGE_ROWS))
 				.toArray();
-			// BSON → 纯 JSON（_id/日期等转字符串），同时保留结构化 docs 供编辑回写
+			// BSON → plain JSON (_id/dates become strings), while keeping structured docs for write-back
 			const replacer = (_k, v) => {
 				if (v && typeof v === "object" && v._bsontype) {
 					if (typeof v.toString === "function" && v.toString !== Object.prototype.toString) return v.toString();
@@ -605,8 +605,8 @@ async function mongoAdapter(cfg) {
 		async docSave(db, t, id, docJson) {
 			let body;
 			try { body = JSON.parse(String(docJson ?? "")); }
-			catch (e) { throw new Error(`文档 JSON 解析失败：${e.message}`); }
-			if (!body || typeof body !== "object" || Array.isArray(body)) throw new Error("文档必须是 JSON 对象");
+			catch (e) { throw new Error(`Failed to parse document JSON：${e.message}`); }
+			if (!body || typeof body !== "object" || Array.isArray(body)) throw new Error("Document must be a JSON object");
 			const toId = (v) => (typeof v === "string" && /^[0-9a-f]{24}$/i.test(v) ? new ObjectId(v) : v);
 			const coll = client.db(db).collection(t);
 			const r = await coll.replaceOne({ _id: toId(id) }, { ...body, _id: toId(id) });
@@ -615,8 +615,8 @@ async function mongoAdapter(cfg) {
 		async docInsert(db, t, docJson) {
 			let body;
 			try { body = JSON.parse(String(docJson ?? "")); }
-			catch (e) { throw new Error(`文档 JSON 解析失败：${e.message}`); }
-			if (!body || typeof body !== "object" || Array.isArray(body)) throw new Error("文档必须是 JSON 对象");
+			catch (e) { throw new Error(`Failed to parse document JSON：${e.message}`); }
+			if (!body || typeof body !== "object" || Array.isArray(body)) throw new Error("Document must be a JSON object");
 			if (typeof body._id === "string" && /^[0-9a-f]{24}$/i.test(body._id)) body._id = new ObjectId(body._id);
 			const r = await client.db(db).collection(t).insertOne(body);
 			return { affected: 1, id: r.insertedId?.toString?.() ?? null };
@@ -626,7 +626,7 @@ async function mongoAdapter(cfg) {
 			const r = await client.db(db).collection(t).deleteOne({ _id: toId(id) });
 			return { affected: r.deletedCount ?? 0 };
 		},
-		async query() { throw new Error("MongoDB 不支持 SQL——请在「数据」页用 JSON 过滤条件查询"); },
+		async query() { throw new Error("MongoDB does not support SQL — use a JSON filter on the Data tab"); },
 		async close() { try { await client.close(); } catch { /* ignore */ } },
 	};
 }
@@ -644,8 +644,8 @@ async function redisAdapter(cfg) {
 		retryStrategy: () => null,
 		lazyConnect: false,
 	});
-	cli.on("error", () => { /* 静默，操作层报错 */ });
-	await withTimeout(cli.ping(), CONNECT_TIMEOUT_MS + 2000, "建立连接");
+	cli.on("error", () => { /* silent，the operation layer reports errors */ });
+	await withTimeout(cli.ping(), CONNECT_TIMEOUT_MS + 2000, "connect");
 
 	async function scanKeys(pattern, cursorIn, want) {
 		want = Math.min(Number(want) || 200, 1000);
@@ -687,9 +687,9 @@ async function redisAdapter(cfg) {
 		} else if (type === "stream") {
 			const r = await cli.xrange(key, "-", "+", "COUNT", 50);
 			value = r.map(([id, fs]) => `${id} ${JSON.stringify(fs)}`).join("\n");
-		} else value = `(类型 ${type} 暂不支持预览)`;
+		} else value = `(Type ${type} preview not supported)`;
 		let truncated = false;
-		if (value.length > 64_000) { value = value.slice(0, 64_000) + "\n…[截断]"; truncated = true; }
+		if (value.length > 64_000) { value = value.slice(0, 64_000) + "\n…[truncated]"; truncated = true; }
 		const size = type === "string"
 			? (await cli.strlen(key))
 			: type === "hash" ? await cli.hlen(key)
@@ -700,7 +700,7 @@ async function redisAdapter(cfg) {
 		return { type, ttl, size, value, truncated };
 	}
 
-	/** 简单命令行分词（支持单双引号） */
+	/** simple command-line tokenize（supports single and double quotes） */
 	function tokenize(line) {
 		const out = [];
 		let cur = "", quote = null;
@@ -721,18 +721,18 @@ async function redisAdapter(cfg) {
 		listTables: async () => [],
 		describeTable: async () => ({ columns: [], indexes: [], ddl: "" }),
 		selectPage: async () => ({ total: 0, columns: [], rows: [] }),
-		query: async () => { throw new Error("Redis 请使用「键」标签的原始命令输入"); },
+		query: async () => { throw new Error("For Redis use the raw command box on the Keys tab"); },
 		scanKeys, keyDetail,
 		delKey: async (key) => await cli.del(key),
 		keySet: async (key, value) => {
 			const type = await cli.type(key);
-			if (type !== "string") throw new Error(`只能编辑字符串键（当前类型 ${type}，可用原始命令操作）`);
+			if (type !== "string") throw new Error(`Only string keys can be edited (current type ${type}; use the raw command)`);
 			await cli.set(key, String(value ?? ""));
 			return { affected: 1 };
 		},
 		runCmd: async (line) => {
 			const args = tokenize(line);
-			if (!args.length) throw new Error("空命令");
+			if (!args.length) throw new Error("Empty command");
 			return await cli.call(args[0], ...args.slice(1));
 		},
 		meta: async () => {
@@ -766,7 +766,7 @@ const DRIVER_MODULE = {
 export default {
 	activate(host) {
 		const st = {
-			conns: [], // 连接配置 [{id,name,type,host,port,user,password,database,file,uri,redisDb}]
+			conns: [], // connection config [{id,name,type,host,port,user,password,database,file,uri,redisDb}]
 			runtime: new Map(), // connId → {connId, ownerId, hostId, label, adapter}
 			nextConnId: 1,
 			depsOk: false,
@@ -774,10 +774,10 @@ export default {
 			depsAvail: null,
 		};
 
-		// ---- 配置持久化 -------------------------------------------------------
-		// 机密存储：连接密码按 conn id 走宿主 host.secrets（AES-256-GCM），
-		// db-connections.json 不再落明文；旧版宿主无此设施时回退旧行为。
-		// uri 里内嵌凭据的情况无法可靠拆分——仍在文件里，注释明示。
+		// ---- config persistence -------------------------------------------------------
+		// secrets storage：connection passwords keyed by conn id go through the host host.secrets（AES-256-GCM），
+		// db-connections.json no longer persist plaintext；fall back to the old behavior when the host lacks this facility。
+		// uri embedded credentials in it cannot be split reliably——still in the file，called out in a comment。
 		const sec = host.secrets;
 
 		async function loadConfig() {
@@ -786,7 +786,7 @@ export default {
 				st.conns = Array.isArray(cfg.conns) ? cfg.conns : [];
 			} catch { st.conns = []; }
 			if (sec?.set) {
-				// 一次性迁移：历史明文密码 → 加密机密 + 文件剥离
+				// one-shot migrate：historical plaintext passwords → encrypted secrets + strip from file
 				let migrated = false;
 				for (const c of st.conns) {
 					if (c.password && c.id) {
@@ -795,18 +795,18 @@ export default {
 						migrated = true;
 					}
 				}
-				if (migrated) { try { await saveConfig(); } catch {} host.log("已将连接密码迁移到加密存储"); }
+				if (migrated) { try { await saveConfig(); } catch {} host.log("Migrated connection passwords into encrypted storage"); }
 			}
 			if (sec?.get) {
-				// 回填内存副本（驱动连接需要真实密码）
+				// refill the in-memory copy（the driver needs the real password to connect）
 				for (const c of st.conns) if (!c.password && c.id) c.password = sec.get(`conn:${c.id}`);
 			}
 		}
 		async function saveConfig() {
-			const conns = sec ? st.conns.map((c) => ({ ...c, password: undefined })) : st.conns; // 剥离密码后落盘
+			const conns = sec ? st.conns.map((c) => ({ ...c, password: undefined })) : st.conns; // persist after stripping passwords
 			await wf(join(host.dir, CONFIG_FILE), JSON.stringify({ conns }, null, "\t"), "utf8");
 		}
-		/** 保存/清除某个连接的密码机密（值真 → 写；显式 null → 删）。 */
+		/** Save/clear a connection password secret (truthy → write; explicit null → delete). */
 		function storeConnSecret(id, pwd) {
 			if (!sec || !id) return;
 			try {
@@ -845,20 +845,20 @@ export default {
 			host.sendTo(clientId, { res: true, reqId, ok: false, action, error: String(error?.message ?? error) });
 		}
 
-		// ---- 依赖自动安装 -----------------------------------------------------
+		// ---- auto-install deps -----------------------------------------------------
 		async function loadDeps() {
-			// 按驱动粒度探测可用性（只装了部分也能用对应类型）
+			// probe availability per driver（partial installs still work for the matching types）
 			const results = await Promise.all(Object.entries(DRIVER_MODULE).map(async ([_type, name]) => {
 				try { await import(name); return [name, true]; }
 				catch { return [name, false]; }
 			}));
 			st.depsAvail = Object.fromEntries(results);
 			st.depsOk = Object.values(st.depsAvail).every(Boolean);
-			if (!st.depsOk) host.log("驱动可用性:", JSON.stringify(st.depsAvail));
+			if (!st.depsOk) host.log("driver availability:", JSON.stringify(st.depsAvail));
 			return st.depsOk;
 		}
 
-		/** 惰性重探测：手动 npm 装完驱动后无需重启服务即可被识别（模块导入有缓存，开销可忽略） */
+		/** Lazy re-probe: after a manual npm install, drivers are recognized without restart (imports are cached). */
 		async function refreshDeps() {
 			if (!st.depsOk && !st.depsInstalling) await loadDeps();
 		}
@@ -877,7 +877,7 @@ export default {
 			st.depsInstalling = true;
 			broadcastAll();
 			host.log(`installing deps: ${DEPS.join(" ")}${auto ? " (auto)" : ""}`);
-			host.notify("info", "🗄️ 数据库插件：开始安装驱动依赖（首次约需几分钟）…");
+			host.notify("info", "🗄️ Database plugin: installing drivers (first time may take a few minutes)…");
 			const npmCli = resolveNpmCli();
 			const args = ["--prefix", host.dir, "install", ...DEPS, "--no-audit", "--no-fund"];
 			const child = npmCli
@@ -893,22 +893,22 @@ export default {
 				done = true;
 				st.depsInstalling = false;
 				if (ok) await loadDeps();
-				// 取 stderr 最后一个非空行（通常是 npm error 摘要），避免只有干巴巴的 exit 码
+				// Take the last non-empty stderr line (usually the npm error summary), not a bare exit code
 				const lastErr = errTail.split(/\r?\n/).filter(Boolean).pop() ?? "";
 				host.notify(
 					ok ? "success" : "error",
 					ok
-						? "🗄️ 数据库插件驱动安装完成"
-						: `🗄️ 数据库插件驱动安装失败（${why}${lastErr ? `：${lastErr}` : ""}）——请在插件目录手动执行：npm install ${DEPS.join(" ")}`,
+						? "🗄️ Database plugin drivers installed"
+						: `🗄️ Database plugin driver install failed（${why}${lastErr ? `：${lastErr}` : ""}）——please run this in the plugin directory：npm install ${DEPS.join(" ")}`,
 				);
 				broadcastAll();
 			}
 		}
 
-		// ---- 连接管理 ---------------------------------------------------------
+		// ---- connection management ---------------------------------------------------------
 		function getRuntime(connId) {
 			const r = st.runtime.get(connId);
-			if (!r) throw new Error(`连接不存在或已断开：${connId}`);
+			if (!r) throw new Error(`Connection does not exist or is closed：${connId}`);
 			return r;
 		}
 
@@ -922,24 +922,24 @@ export default {
 
 		async function openAdapter(cfg) {
 			const factory = ADAPTER_FACTORIES[cfg.type];
-			if (!factory) throw new Error(`未知数据库类型：${cfg.type}`);
+			if (!factory) throw new Error(`Unknown database type：${cfg.type}`);
 			await refreshDeps();
 			const driver = DRIVER_MODULE[cfg.type];
 			if (st.depsAvail?.[driver] === false) {
-				throw new Error(`驱动 ${driver} 未安装——请点左侧「安装驱动」或手动在插件目录执行 npm install ${driver}`);
+				throw new Error(`driver ${driver} not installed——click Install drivers on the left, or run in the plugin directory npm install ${driver}`);
 			}
 			try {
 				return await factory(cfg);
 			} catch (err) {
 				if (/Cannot find|ERR_MODULE_NOT_FOUND/.test(String(err?.message ?? err))) {
-					throw new Error(`驱动 ${driver} 未安装——请点左侧「安装驱动」或手动在插件目录执行 npm install ${driver}`);
+					throw new Error(`driver ${driver} not installed——click Install drivers on the left, or run in the plugin directory npm install ${driver}`);
 				}
 				throw err;
 			}
 		}
 
-		/** 就绪门：配置读取 + 驱动探测完成前，所有消息排队等待（避免 mount 即发的
-		    state 请求读到空列表、甚至保存时覆写未加载的配置） */
+		/** Readiness gate: until config load + driver probe finish, all messages wait in queue (so a mount-time
+		    state a request would read an empty list、or even overwrite config that has not loaded yet when saving） */
 		let readyPromise = null;
 		function ensureReady() {
 			if (!readyPromise) {
@@ -954,7 +954,7 @@ export default {
 		}
 
 		// ------------------------------------------------------------------
-		// 消息路由
+		// message routing
 		// ------------------------------------------------------------------
 		const off = host.onMessage(async (payload, clientId) => {
 			await ensureReady();
@@ -967,7 +967,7 @@ export default {
 			try {
 				switch (action) {
 					case "state": {
-						// 驱动状态可能已变（手动补装），回显前重探测一次
+						// driver status may have changed（manual install），re-probe once before echoing
 						await refreshDeps();
 						return void respond(action, reqId, clientId, { state: publicState() });
 					}
@@ -977,22 +977,22 @@ export default {
 
 					case "conns_save": {
 						const c = msg.conn ?? {};
-						if (!DB_TYPES[c.type]) throw new Error("请选择数据库类型");
-						if (c.type !== "sqlite" && !String(c.host ?? "").trim()) throw new Error("主机地址不能为空");
+						if (!DB_TYPES[c.type]) throw new Error("Choose a database type");
+						if (c.type !== "sqlite" && !String(c.host ?? "").trim()) throw new Error("Host cannot be empty");
 						if (c.id) {
 							const i = st.conns.findIndex((x) => x.id === c.id);
-							if (i < 0) throw new Error("连接不存在");
+							if (i < 0) throw new Error("Connection not found");
 							const old = st.conns[i];
-							// 密码语义不变：留空 = 沿用旧值；显式 null = 清除（同步删机密）
+							// Password semantics unchanged: blank = keep old; explicit null = clear (also delete secret)
 							storeConnSecret(c.id, c.password === null ? null : (c.password || undefined));
 							st.conns[i] = {
 								...old,
 								name: c.name ?? old.name,
-								type: old.type, // 类型不允许改（驱动语义差异大）
+								type: old.type, // type cannot be changed（driver semantics differ a lot）
 								host: c.type !== "sqlite" ? String(c.host ?? "").trim() : old.host,
 								port: Number(c.port) || old.port,
 								user: c.user ?? old.user,
-								// 凭据留空 = 沿用旧值；显式 null = 清除
+								// leave credentials blank = keep the old value；explicit null = clear
 								password: c.password === null ? undefined : (c.password || old.password),
 								database: c.database ?? old.database,
 								file: c.file ?? old.file,
@@ -1000,7 +1000,7 @@ export default {
 								redisDb: Number.isFinite(+c.redisDb) ? +c.redisDb : old.redisDb,
 							};
 						} else {
-							if (st.conns.length >= MAX_CONNS) throw new Error(`最多保存 ${MAX_CONNS} 个连接`);
+							if (st.conns.length >= MAX_CONNS) throw new Error(`At most ${MAX_CONNS} connections`);
 							const id = `d${Date.now().toString(36)}${Math.random().toString(36).slice(2, 5)}`;
 							storeConnSecret(id, c.password || undefined);
 							st.conns.push({
@@ -1023,24 +1023,24 @@ export default {
 					}
 
 					case "conns_delete": {
-						await loadConfig(); // 尚未加载时先迁移+回填，避免残留机密孤儿
+						await loadConfig(); // migrate + refill first if not loaded, avoid leftover orphan secrets
 						const before = st.conns.length;
 						st.conns = st.conns.filter((x) => x.id !== msg.id);
-						if (st.conns.length === before) throw new Error("连接不存在");
-						storeConnSecret(msg.id, null); // 机密随连接一起删
+						if (st.conns.length === before) throw new Error("Connection not found");
+						storeConnSecret(msg.id, null); // delete the secret along with the connection
 						await saveConfig();
-						for (const r of [...st.runtime.values()]) if (r.hostId === msg.id) dropRuntime(r, "连接配置已删除");
+						for (const r of [...st.runtime.values()]) if (r.hostId === msg.id) dropRuntime(r, "Connection config deleted");
 						broadcastAll();
 						return void respond(action, reqId, clientId, {});
 					}
 
 					case "test": {
-						// 表单测试：完整 conn 对象（编辑时密码留空则沿用已存值）
+						// Form test: full conn object (leave password blank when editing to keep stored value)
 						let cfg = { ...msg.conn };
 						if (cfg.id) {
 							const saved = st.conns.find((x) => x.id === cfg.id);
 							if (saved && !cfg.password) cfg.password = saved.password;
-							if (saved) cfg.type = saved.type; // 类型不可改
+							if (saved) cfg.type = saved.type; // type cannot be changed
 						}
 						cfg.port = Number(cfg.port) || DB_TYPES[cfg.type]?.port || 0;
 						const adapter = await openAdapter(cfg);
@@ -1050,13 +1050,13 @@ export default {
 
 					case "connect": {
 						const cfg = st.conns.find((x) => x.id === msg.id);
-						if (!cfg) throw new Error("连接不存在");
+						if (!cfg) throw new Error("Connection not found");
 						for (const r of st.runtime.values()) {
-							if (r.hostId === cfg.id) { // 已开 → 直接复用
+							if (r.hostId === cfg.id) { // already open → reuse
 								return void respond(action, reqId, clientId, { connId: r.connId, label: r.label, kind: r.adapter.kind, dialect: r.adapter.dialect });
 							}
 						}
-						if (st.runtime.size >= MAX_RUNTIME) throw new Error(`最多同时打开 ${MAX_RUNTIME} 个连接，请先断开一些`);
+						if (st.runtime.size >= MAX_RUNTIME) throw new Error(`At most ${MAX_RUNTIME} connections open at once; disconnect some first`);
 						const adapter = await openAdapter(cfg);
 						const connId = `c${st.nextConnId++}`;
 						const r = { connId, ownerId: clientId, hostId: cfg.id, label: cfg.name || cfg.host || cfg.file || cfg.type, adapter };
@@ -1066,24 +1066,24 @@ export default {
 					}
 
 					case "disconnect": {
-						dropRuntime(getRuntime(msg.connId), "手动断开");
+						dropRuntime(getRuntime(msg.connId), "Disconnected by user");
 						return void respond(action, reqId, clientId, {});
 					}
 
-					// ---- 通用 SQL/NoSQL 浏览 ----
+					// ---- Shared SQL/NoSQL browse ----
 					case "dbs_list": {
 						const r = getRuntime(msg.connId);
-						return void respond(action, reqId, clientId, { databases: await withTimeout(r.adapter.listDatabases(), OP_TIMEOUT_MS, "查询") });
+						return void respond(action, reqId, clientId, { databases: await withTimeout(r.adapter.listDatabases(), OP_TIMEOUT_MS, "query") });
 					}
 					case "tables_list": {
 						const r = getRuntime(msg.connId);
-						const tables = await withTimeout(r.adapter.listTables(msg.db), OP_TIMEOUT_MS, "查询");
+						const tables = await withTimeout(r.adapter.listTables(msg.db), OP_TIMEOUT_MS, "query");
 						tables.sort((a, b) => a.name.localeCompare(b.name));
 						return void respond(action, reqId, clientId, { tables });
 					}
 					case "describe": {
 						const r = getRuntime(msg.connId);
-						const d = await withTimeout(r.adapter.describeTable(msg.db, msg.table), OP_TIMEOUT_MS, "查询");
+						const d = await withTimeout(r.adapter.describeTable(msg.db, msg.table), OP_TIMEOUT_MS, "query");
 						return void respond(action, reqId, clientId, { describe: d });
 					}
 					case "page": {
@@ -1091,95 +1091,95 @@ export default {
 						const grid = await withTimeout(r.adapter.selectPage(msg.db, msg.table, {
 							offset: msg.offset, limit: msg.limit,
 							orderBy: msg.orderBy, dir: msg.dir, filter: msg.filter,
-						}), OP_TIMEOUT_MS, "查询");
+						}), OP_TIMEOUT_MS, "query");
 						return void respond(action, reqId, clientId, { grid });
 					}
 					case "query_exec": {
 						const r = getRuntime(msg.connId);
 						const sql = String(msg.sql ?? "");
-						if (!sql.trim()) throw new Error("SQL 为空");
-						const grid = await withTimeout(r.adapter.query(msg.db, sql), OP_TIMEOUT_MS, "查询");
+						if (!sql.trim()) throw new Error("SQL is empty");
+						const grid = await withTimeout(r.adapter.query(msg.db, sql), OP_TIMEOUT_MS, "query");
 						return void respond(action, reqId, clientId, { grid });
 					}
 
-					// ---- 行编辑（SQL 系） ----
+					// ---- Row edit (SQL) ----
 					case "row_update": {
 						const r = getRuntime(msg.connId);
-						if (!r.adapter.updateRow) throw new Error("该数据源不支持行编辑");
+						if (!r.adapter.updateRow) throw new Error("This data source does not support row edits");
 						const out = await withTimeout(
 							r.adapter.updateRow(msg.db, msg.table, String(msg.pk?.col ?? ""), msg.pk?.val, msg.changes ?? {}),
-							OP_TIMEOUT_MS, "写入");
+							OP_TIMEOUT_MS, "write");
 						return void respond(action, reqId, clientId, out);
 					}
 					case "row_insert": {
 						const r = getRuntime(msg.connId);
-						if (!r.adapter.insertRow) throw new Error("该数据源不支持插入行");
-						const out = await withTimeout(r.adapter.insertRow(msg.db, msg.table, msg.values ?? {}), OP_TIMEOUT_MS, "写入");
+						if (!r.adapter.insertRow) throw new Error("This data source does not support inserting rows");
+						const out = await withTimeout(r.adapter.insertRow(msg.db, msg.table, msg.values ?? {}), OP_TIMEOUT_MS, "write");
 						return void respond(action, reqId, clientId, out);
 					}
 					case "row_delete": {
 						const r = getRuntime(msg.connId);
-						if (!r.adapter.deleteRow) throw new Error("该数据源不支持删除行");
-						const out = await withTimeout(r.adapter.deleteRow(msg.db, msg.table, String(msg.pk?.col ?? ""), msg.pk?.val), OP_TIMEOUT_MS, "写入");
+						if (!r.adapter.deleteRow) throw new Error("This data source does not support deleting rows");
+						const out = await withTimeout(r.adapter.deleteRow(msg.db, msg.table, String(msg.pk?.col ?? ""), msg.pk?.val), OP_TIMEOUT_MS, "write");
 						return void respond(action, reqId, clientId, out);
 					}
 
-					// ---- MongoDB 文档编辑 ----
+					// ---- MongoDB document edit ----
 					case "doc_save": {
 						const r = getRuntime(msg.connId);
-						if (!r.adapter.docSave) throw new Error("该数据源不支持文档编辑");
-						const out = await withTimeout(r.adapter.docSave(msg.db, msg.table, msg.id, msg.docJson), OP_TIMEOUT_MS, "写入");
+						if (!r.adapter.docSave) throw new Error("This data source does not support document edits");
+						const out = await withTimeout(r.adapter.docSave(msg.db, msg.table, msg.id, msg.docJson), OP_TIMEOUT_MS, "write");
 						return void respond(action, reqId, clientId, out);
 					}
 					case "doc_insert": {
 						const r = getRuntime(msg.connId);
-						if (!r.adapter.docInsert) throw new Error("该数据源不支持插入文档");
-						const out = await withTimeout(r.adapter.docInsert(msg.db, msg.table, msg.docJson), OP_TIMEOUT_MS, "写入");
+						if (!r.adapter.docInsert) throw new Error("This data source does not support inserting documents");
+						const out = await withTimeout(r.adapter.docInsert(msg.db, msg.table, msg.docJson), OP_TIMEOUT_MS, "write");
 						return void respond(action, reqId, clientId, out);
 					}
 					case "doc_delete": {
 						const r = getRuntime(msg.connId);
-						if (!r.adapter.docDelete) throw new Error("该数据源不支持删除文档");
-						const out = await withTimeout(r.adapter.docDelete(msg.db, msg.table, msg.id), OP_TIMEOUT_MS, "写入");
+						if (!r.adapter.docDelete) throw new Error("This data source does not support deleting documents");
+						const out = await withTimeout(r.adapter.docDelete(msg.db, msg.table, msg.id), OP_TIMEOUT_MS, "write");
 						return void respond(action, reqId, clientId, out);
 					}
 
-					// ---- Redis 专属 ----
+					// ---- Redis-only ----
 					case "redis_scan": {
 						const r = getRuntime(msg.connId);
-						if (!r.adapter.scanKeys) throw new Error("该连接不是 Redis");
-						const out = await withTimeout(r.adapter.scanKeys(msg.pattern, msg.cursor, msg.count), OP_TIMEOUT_MS, "查询");
+						if (!r.adapter.scanKeys) throw new Error("This connection is not Redis");
+						const out = await withTimeout(r.adapter.scanKeys(msg.pattern, msg.cursor, msg.count), OP_TIMEOUT_MS, "query");
 						return void respond(action, reqId, clientId, out);
 					}
 					case "redis_key": {
 						const r = getRuntime(msg.connId);
-						const detail = await withTimeout(r.adapter.keyDetail(String(msg.key ?? "")), OP_TIMEOUT_MS, "查询");
+						const detail = await withTimeout(r.adapter.keyDetail(String(msg.key ?? "")), OP_TIMEOUT_MS, "query");
 						return void respond(action, reqId, clientId, { detail });
 					}
 					case "redis_del": {
 						const r = getRuntime(msg.connId);
-						const n = await withTimeout(r.adapter.delKey(String(msg.key ?? "")), OP_TIMEOUT_MS, "删除");
+						const n = await withTimeout(r.adapter.delKey(String(msg.key ?? "")), OP_TIMEOUT_MS, "Delete");
 						return void respond(action, reqId, clientId, { deleted: Number(n) || 0 });
 					}
 					case "redis_key_set": {
 						const r = getRuntime(msg.connId);
-						if (!r.adapter.keySet) throw new Error("该连接不是 Redis 或不支持键编辑");
-						const out = await withTimeout(r.adapter.keySet(String(msg.key ?? ""), String(msg.value ?? "")), OP_TIMEOUT_MS, "写入");
+						if (!r.adapter.keySet) throw new Error("This connection is not Redis or does not support key edits");
+						const out = await withTimeout(r.adapter.keySet(String(msg.key ?? ""), String(msg.value ?? "")), OP_TIMEOUT_MS, "write");
 						return void respond(action, reqId, clientId, out);
 					}
 					case "redis_cmd": {
 						const r = getRuntime(msg.connId);
-						const out = await withTimeout(r.adapter.runCmd(String(msg.cmd ?? "")), OP_TIMEOUT_MS, "命令");
+						const out = await withTimeout(r.adapter.runCmd(String(msg.cmd ?? "")), OP_TIMEOUT_MS, "command");
 						return void respond(action, reqId, clientId, { output: cellVal(out) });
 					}
 					case "redis_meta": {
 						const r = getRuntime(msg.connId);
-						const meta = await withTimeout(r.adapter.meta(), OP_TIMEOUT_MS, "查询");
+						const meta = await withTimeout(r.adapter.meta(), OP_TIMEOUT_MS, "query");
 						return void respond(action, reqId, clientId, { meta });
 					}
 
 					default:
-						return void fail(action, reqId, clientId, `未知操作 ${action}`);
+						return void fail(action, reqId, clientId, `Unknown action ${action}`);
 				}
 			} catch (err) {
 				fail(action, reqId, clientId, err);
@@ -1188,8 +1188,8 @@ export default {
 
 		void ensureReady();
 
-		// 新客户端接入时主动推送完整状态（服务端唯一事实源）；
-		// host.onAttach 在旧版宿主上不存在——可选链兼容，客户端拉取仍作兑底
+		// on new client attach, actively push the full state（server is the single source of truth）；
+		// host.onAttach does not exist on older hosts——optional-chaining compatible，the client can still pull as a fallback
 		const offAttach = host.onAttach?.((clientId) => {
 			void ensureReady().then(() => {
 				host.sendTo(clientId, { kind: "state", state: publicState() });

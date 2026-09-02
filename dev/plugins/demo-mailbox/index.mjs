@@ -1,36 +1,36 @@
 /**
- * demo-mailbox 服务端入口 —— 插件协议示例。
+ * demo-mailbox server entry — plugin protocol sample.
  *
- * 约定：ESM 默认导出 { activate(host) → deactivate? }。
-		// 声明式设置（manifest "settings"）：读默认值 + 订阅面板改动。
-		// 演示完整循环：宿主已按 schema 校验并持久化，插件这里只消费。
+ * Convention: ESM default export { activate(host) → deactivate? }.
+		// Declarative settings (manifest "settings"): read defaults + subscribe to panel changes.
+		// Demonstrates the full loop: the host already validated and persisted by schema; the plugin only consumes.
 		let cfg = host.getSettings?.() ?? {};
 		const offSettings = host.onSettingsChanged?.((v) => {
 			cfg = v;
 			host.log("settings changed:", JSON.stringify(v));
 			host.broadcast({ settings: cfg });
 		});
- * host 提供 broadcast / onMessage / dir / dataDir / cwd / log。
- * 真实邮箱插件在这里接 IMAP/SMTP（凭据存 host.dir，不进代码库）；
- * 示例只做内存收发 + 回声，证明链路可用。
+ * host provides broadcast / onMessage / dir / dataDir / cwd / log.
+ * A real mail plugin would talk IMAP/SMTP here (credentials in host.dir, not in the repo);
+ * this sample only does in-memory send/receive + echo to prove the wire works.
  */
 
 const mails = [
 	{
 		id: 1,
 		from: "alice@example.com",
-		subject: "欢迎使用 pi-web-ui 插件",
+		subject: "Welcome to the pi-web-ui plugin",
 		date: new Date().toISOString(),
 		body:
-			"这是一个由插件提供的界面组件：目录放在 <dataDir>/plugins/demo-mailbox/，" +
-			"删掉目录即卸载。服务端入口（本文件）可以访问 Node 全部能力。",
+			"This is a UI component provided by a plugin: the directory lives at <dataDir>/plugins/demo-mailbox/," +
+			" deleting the directory uninstalls it. The server entry (this file) can use all of Node.",
 	},
 	{
 		id: 2,
 		from: "bob@example.com",
-		subject: "试试发一封",
+		subject: "Try sending a message",
 		date: new Date(Date.now() - 3600_000).toISOString(),
-		body: "在下方表单里填收件人和正文，点发送——消息经 WebSocket 到达本文件，再广播回所有打开的页面。",
+		body: "Fill in the recipient and body in the form below and click Send — the message reaches this file over WebSocket, then broadcasts back to every open page.",
 	},
 ];
 let nextId = 3;
@@ -44,14 +44,14 @@ export default {
 					host.broadcast({ mails });
 					break;
 				case "notify":
-					host.notify("info", String(msg.text ?? "插件通知测试"));
+					host.notify("info", String(msg.text ?? "Plugin notify test"));
 					break;
 				case "send": {
 					const mail = {
 						id: nextId++,
 						from: "me@local",
 						to: String(msg.to ?? ""),
-						subject: String(msg.subject ?? "(无主题)"),
+						subject: String(msg.subject ?? "(no subject)"),
 						date: new Date().toISOString(),
 						body: String(msg.body ?? ""),
 						outgoing: true,
@@ -67,7 +67,7 @@ export default {
 		});
 		host.log("activated; mails in memory:", mails.length);
 
-		// 返回清理函数：插件目录被删除 / 服务关停时调用
+		// Return a cleanup function: called when the plugin directory is deleted / the server shuts down
 		return () => {
 			off();
 			host.log("deactivated");

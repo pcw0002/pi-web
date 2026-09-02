@@ -1,8 +1,8 @@
 {
 	"id": "vscode-editor",
-	"name": "编辑器",
+	"name": "Editor",
 	"version": "0.2.0",
-	"description": "类 VSCode 编辑器视图：多根文件树（本地 + SSH 主机）/ 多标签 CodeMirror / Remote-SSH 远程文件浏览与编辑 / 底部多终端（xterm.js）/ SFTP 上传下载同步。依赖 ssh2 首次激活自动安装。",
+	"description": "VS Code-like editor view: multi-root file tree (local + SSH hosts) / multi-tab CodeMirror / Remote-SSH file browse and edit / bottom multi-terminal (xterm.js) / SFTP upload/download sync. ssh2 is auto-installed on first activate.",
 	"permissions": [
 		"fs:workspace+ssh",
 		"net:ssh",

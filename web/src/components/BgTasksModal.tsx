@@ -21,7 +21,7 @@ function formatSince(since: number, t: ReturnType<typeof useT>): string {
 }
 
 /**
- * 后台任务面板 — the AI-started background servers (detected via listening-port
+ * Background-tasks panel — the AI-started background servers (detected via listening-port
  * diffs around bash tool runs). Each task can be stopped individually, or all
  * at once. The list lives on the CLIENT (not a conversation), so it survives
  * conversation ends and reconnects — it only empties when tasks are stopped or
@@ -31,7 +31,7 @@ export function BgTasksModal({ servers, send, onClose }: BgTasksModalProps) {
 	const t = useT();
 	// Which tasks have their command line expanded (default: one truncated line
 	// + hover tooltip; click toggles full wrap so long commands stay readable).
-	// 插件任务无 port——用 taskId 作展开键。
+	// Plugin tasks have no port — use taskId as the expand key.
 	const [expanded, setExpanded] = useState<Set<string>>(new Set());
 	const toggleCmd = (key: string) =>
 		setExpanded((prev) => {
@@ -74,7 +74,7 @@ export function BgTasksModal({ servers, send, onClose }: BgTasksModalProps) {
 				) : (
 					<ul className="bg-task-list">
 						{servers.map((s) => {
-							// 插件任务（registerBackgroundTask）没有端口/pid——键与展示按 taskId。
+							// Plugin tasks (registerBackgroundTask) have no port/pid — key and display by taskId.
 							const isPlugin = !!s.taskId;
 							const key = s.taskId ?? String(s.port);
 							return (

@@ -3,8 +3,8 @@ import {
 	FiDownload,
 	FiFolder,
 	FiGitBranch,
+	FiEdit3,
 	FiGithub,
-	FiGlobe,
 	FiMenu,
 	FiMessageSquare,
 	FiMoreHorizontal,
@@ -23,7 +23,7 @@ import { Dropdown, DropdownItem } from "./Dropdown";
 import { ModelThinking } from "./ModelThinking";
 import { SoundSettingsPanel } from "./SoundSettings";
 import type { SoundKind, SoundSettings } from "../sounds";
-import { useI18n, type Locale } from "../i18n";
+import { useT } from "../i18n";
 
 interface TopBarProps {
 	chat: ChatState;
@@ -43,8 +43,8 @@ interface TopBarProps {
 		}) => void;
 		restart: (id: string) => void;
 	};
-	view: "chat" | "terminal" | "git" | `plugin:${string}`;
-	onViewChange: (view: "chat" | "terminal" | "git" | `plugin:${string}`) => void;
+	view: "chat" | "terminal" | "git" | "review" | `plugin:${string}`;
+	onViewChange: (view: "chat" | "terminal" | "git" | "review" | `plugin:${string}`) => void;
 	/** Installed optional plugins (<dataDir>/plugins) — one view tab each. */
 	plugins: { id: string; name: string; icon?: string; description?: string; error?: string }[];
 	/** Open a side panel as a mobile drawer ("left" = history, "right" = files). */
@@ -86,17 +86,11 @@ export function TopBar({
 	theme,
 	onThemeChange,
 }: TopBarProps) {
-	const { locale, setLocale, t } = useI18n();
+	const t = useT();
 	const [soundOpen, setSoundOpen] = useState(false);
-	const [langOpen, setLangOpen] = useState(false);
 	const [themeOpen, setThemeOpen] = useState(false);
 	const [updateOpen, setUpdateOpen] = useState(false);
 	const [moreOpen, setMoreOpen] = useState(false);
-
-	const LANGUAGES: { value: Locale; label: string }[] = [
-		{ value: "zh", label: t("langZh") },
-		{ value: "en", label: t("langEn") },
-	];
 
 	const connLabel = chat.ready
 		? t("connected")
@@ -265,6 +259,16 @@ export function TopBar({
 						<FiGitBranch />
 						<span>{t("scmTab")}</span>
 					</button>
+					<button
+						type="button"
+						role="tab"
+						aria-selected={view === "review"}
+						className={view === "review" ? "active" : ""}
+						onClick={() => onViewChange("review")}
+					>
+						<FiEdit3 />
+						<span>{t("reviewTab")}</span>
+					</button>
 					{plugins.map((p) => {
 						const tip = p.error
 							? `${p.name}: ${p.error}`
@@ -348,33 +352,6 @@ export function TopBar({
 							onChange={onSoundChange}
 							onPreview={onSoundPreview}
 						/>
-					</Dropdown>
-
-					<Dropdown
-						trigger={
-							<>
-								<FiGlobe />
-								<span className="chip-sub">
-									{locale === "zh" ? t("langZh") : "EN"}
-								</span>
-							</>
-						}
-						open={langOpen}
-						onOpenChange={setLangOpen}
-					>
-						<div className="dd-header">{t("language")}</div>
-						{LANGUAGES.map((l) => (
-							<DropdownItem
-								key={l.value}
-								active={locale === l.value}
-								onClick={() => {
-									setLocale(l.value);
-									setLangOpen(false);
-								}}
-							>
-								{l.label}
-							</DropdownItem>
-						))}
 					</Dropdown>
 
 					<Dropdown
@@ -513,16 +490,6 @@ export function TopBar({
 							onChange={onSoundChange}
 							onPreview={onSoundPreview}
 						/>
-						<div className="dd-header">{t("language")}</div>
-						{LANGUAGES.map((l) => (
-							<DropdownItem
-								key={l.value}
-								active={locale === l.value}
-								onClick={() => setLocale(l.value)}
-							>
-								{l.label}
-							</DropdownItem>
-						))}
 						<div className="dd-header">{t("theme")}</div>
 						<DropdownItem
 							active={theme === null}

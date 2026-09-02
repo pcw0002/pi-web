@@ -16,7 +16,7 @@ import { fileURLToPath } from "node:url";
 import { chromium } from "playwright-core";
 import { execSync, spawn } from "node:child_process";
 import { setTimeout as sleep } from "node:timers/promises";
-// fileURLToPath: URL.pathname 在 Windows 下是 /E:/... 形式，直接当 cwd 会失败
+// fileURLToPath: URL.pathname on Windows is /E:/...; using it as cwd directly fails
 const REPO_ROOT = fileURLToPath(new globalThis.URL("../", import.meta.url));
 
 const HEADLESS = CHROME_PATH;
@@ -127,7 +127,7 @@ await page.goto(URL);
 const connected = await page
 	.waitForFunction(
 		() =>
-			document.querySelector(".conn-label")?.textContent?.includes("已连接"),
+			document.querySelector(".conn-label")?.textContent?.includes("Connected"),
 		{ timeout: 15000 },
 	)
 	.then(() => true)
@@ -178,7 +178,7 @@ if (!(await startServer())) {
 const recovered = await page
 	.waitForFunction(
 		() =>
-			document.querySelector(".conn-label")?.textContent?.includes("已连接"),
+			document.querySelector(".conn-label")?.textContent?.includes("Connected"),
 		{ timeout: 25000 },
 	)
 	.then(() => true)
@@ -196,7 +196,7 @@ const reply = await page.evaluate(async () => {
 	ta.dispatchEvent(new Event("input", { bubbles: true }));
 	await new Promise((r) => setTimeout(r, 100));
 	const sendBtn = [...document.querySelectorAll("button")].find(
-		(b) => b.title === "发送（Enter）",
+		(b) => b.title === "Send (Enter)",
 	);
 	sendBtn.click();
 

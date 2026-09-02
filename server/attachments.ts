@@ -1,9 +1,10 @@
 /**
- * attachments — 附件构建：把 prompt.attachments（inline/reference/lines、
- * 粘贴图片 imageData、上传 fileData）转成独立的 custom message（asides）。
- * 视觉桥（纯文本主模型看图）也在这里接线：图片交给视觉模型转写成文字证据。
+ * attachments — build attachments: turn prompt.attachments (inline/reference/lines,
+ * pasted imageData, uploaded fileData) into standalone custom messages (asides).
+ * The vision bridge (so a text-only main model can "see" images) is wired here too:
+ * images are handed to a vision model and transcribed into textual evidence.
  *
- * 从 agent-service.ts 抽出，行为保持不变；上下文经 AttachmentContext 注入。
+ * Extracted from agent-service.ts with behavior unchanged; context is injected via AttachmentContext.
  */
 import type {
 	AgentSession,
@@ -24,11 +25,11 @@ import {
 } from "./vision-bridge.js";
 import type { ClientSettings } from "./client-state.js";
 
-/** 跨快照的视觉转写缓存：批次 hash（名称 + base64 头 + 提示词）→ 转写文本。
- *  编辑重问重发相同图片不再重复耗视觉 token。进程级共享即可。 */
+/** Cross-snapshot vision-transcription cache: batch hash (name + base64 head + prompt) → transcribed text.
+ *  Re-asking with the same image does not spend vision tokens again. Process-level sharing is enough. */
 const visionBridgeCache = new Map<string, string>();
 
-/** "provider/id" 解析；非法格式返回 null。 */
+/** Parse "provider/id"; returns null on an illegal format. */
 export function parseModelSpec(spec?: string | null): {
 	provider: string;
 	id: string;
@@ -40,11 +41,11 @@ export function parseModelSpec(spec?: string | null): {
 	return { provider: spec.slice(0, slash), id: spec.slice(slash + 1), spec };
 }
 
-/** buildAttachmentMessages 所需的会话侧上下文。 */
+/** Session-side context required by buildAttachmentMessages. */
 export interface AttachmentContext {
-	/** 当前工作区（相对路径解析根）。 */
+	/** Current workspace (root for resolving relative paths). */
 	cwd: string;
-	/** 上传文件归属的浏览器客户端。 */
+	/** Browser client that owns the uploaded files. */
 	clientId: string;
 	emit: (msg: ServerMessage) => void;
 	settings: ClientSettings;
@@ -232,7 +233,7 @@ export async function buildAttachmentMessages(
 			ctx.emit({
 				type: "notice",
 				level: "warning",
-				text: `当前模型（${mainModel?.name ?? mainModel?.id ?? "未知"}）不支持识图，且视觉桥已在设置中关闭：图片将原样发送、可能被忽略。`,
+				text: `Current model (${mainModel?.name ?? mainModel?.id ?? "unknown"}) has no vision, and the vision bridge is disabled in settings. Images will be sent as-is and may be ignored.`,
 			});
 		} else {
 			const visionModels = findVisionModels(ctx.session.modelRuntime);
@@ -257,7 +258,7 @@ export async function buildAttachmentMessages(
 				ctx.emit({
 					type: "notice",
 					level: "warning",
-					text: `当前模型（${mainModel?.name ?? mainModel?.id ?? "未知"}）不支持识图，且未找到可用的视觉模型：图片将原样发送、可能被忽略。在模型配置里添加任意支持图片的模型（如 qwen-vl、GLM-4V、Gemini）即可自动启用视觉桥转写。`,
+					text: `Current model (${mainModel?.name ?? mainModel?.id ?? "unknown"}) has no vision, and no vision model is configured. Images will be sent as-is and may be ignored. Add any image-capable model (qwen-vl, GLM-4V, Gemini, …) in Model config to enable the vision bridge.`,
 				});
 			} else {
 				// Batch hash so re-sending identical images (edit & re-ask) reuses
@@ -279,7 +280,7 @@ export async function buildAttachmentMessages(
 					ctx.emit({
 						type: "notice",
 						level: "info",
-						text: `当前模型不支持识图，正在用视觉桥（${chosen.label}）转写 ${bridgedImages.length} 张图片…`,
+						text: `Current model has no vision; transcribing ${bridgedImages.length} image(s) with the vision bridge (${chosen.label})…`,
 					});
 					try {
 						const chosenModel = ctx.session.modelRuntime.getModel(
@@ -305,14 +306,14 @@ export async function buildAttachmentMessages(
 						ctx.emit({
 							type: "notice",
 							level: "info",
-							text: `✅ 图片已由视觉桥转写完成（${chosen.label}）`,
+							text: `Vision bridge finished transcribing (${chosen.label})`,
 						});
 					} catch (err) {
 						transcript = "";
 						ctx.emit({
 							type: "notice",
 							level: "error",
-							text: `图片转写失败（${chosen.label}）：${(err as Error).message}。图片将原样发送、可能被忽略。`,
+							text: `Vision bridge failed (${chosen.label}): ${(err as Error).message}. Images will be sent as-is and may be ignored.`,
 						});
 					}
 				}
@@ -337,7 +338,7 @@ export async function buildAttachmentMessages(
 				ctx.emit({
 					type: "notice",
 					level: "error",
-					text: `图片数据为空，已跳过`,
+					text: `Empty image data, skipped`,
 				});
 				continue;
 			}
@@ -345,7 +346,7 @@ export async function buildAttachmentMessages(
 				ctx.emit({
 					type: "notice",
 					level: "warning",
-					text: `图片过大已跳过（>2MB）：${att.name ?? "粘贴图片"}`,
+					text: `Image skipped (over 2MB): ${att.name ?? "pasted image"}`,
 				});
 				continue;
 			}
@@ -405,7 +406,7 @@ export async function buildAttachmentMessages(
 				ctx.emit({
 					type: "notice",
 					level: "error",
-					text: `文件数据为空，已跳过`,
+					text: `Empty file data, skipped`,
 				});
 				continue;
 			}
@@ -413,13 +414,13 @@ export async function buildAttachmentMessages(
 				ctx.emit({
 					type: "notice",
 					level: "warning",
-					text: `文件过大已跳过（>20MB）：${att.name ?? "上传文件"}`,
+					text: `File skipped (over 20MB): ${att.name ?? "uploaded file"}`,
 				});
 				continue;
 			}
 			// Uploaded files live in a GLOBAL per-user dir (not inside the project
 			// or the per-client session store) so browsing a repo never picks up
-			// uploaded junk: <dataDir>/uploads/<clientId>/（保留期自动清理，见 uploads.ts）。
+			// uploaded junk: <dataDir>/uploads/<clientId>/ (auto-cleaned after retention; see uploads.ts).
 			const { abs, displayName: safeName } = saveUpload(
 				ctx.clientId,
 				att.name ?? "file",
@@ -453,7 +454,7 @@ export async function buildAttachmentMessages(
 				ctx.emit({
 					type: "notice",
 					level: "warning",
-					text: `无法恢复已上传文件（路径不在本客户端上传目录）：${att.name ?? att.uploadPath}`,
+					text: `Cannot restore upload (path is not in this client's upload directory): ${att.name ?? att.uploadPath}`,
 				});
 				continue;
 			}
@@ -464,7 +465,7 @@ export async function buildAttachmentMessages(
 				ctx.emit({
 					type: "notice",
 					level: "warning",
-					text: `无法恢复已上传文件（已被清理或不可读）：${att.name ?? att.uploadPath}`,
+					text: `Cannot restore upload (cleaned up or unreadable): ${att.name ?? att.uploadPath}`,
 				});
 				continue;
 			}
@@ -483,7 +484,7 @@ export async function buildAttachmentMessages(
 			ctx.emit({
 				type: "notice",
 				level: "warning",
-				text: `附件路径超出工作区：${att.path}`,
+				text: `Attachment path is outside the workspace: ${att.path}`,
 			});
 			continue;
 		}
@@ -499,7 +500,7 @@ export async function buildAttachmentMessages(
 			ctx.emit({
 				type: "notice",
 				level: "error",
-				text: `附件不存在：${att.path}`,
+				text: `Attachment not found: ${att.path}`,
 			});
 			continue;
 		}
@@ -529,7 +530,7 @@ export async function buildAttachmentMessages(
 			ctx.emit({
 				type: "notice",
 				level: "warning",
-				text: `跳过非文件附件：${att.path}`,
+				text: `Skipping non-file attachment: ${att.path}`,
 			});
 			continue;
 		}
@@ -596,7 +597,7 @@ ${transcript}
 				ctx.emit({
 					type: "notice",
 					level: "warning",
-					text: `图片附件过大已跳过（>200KB）：${att.path}`,
+					text: `Image attachment skipped (over 200KB): ${att.path}`,
 				});
 				continue;
 			}
@@ -671,7 +672,7 @@ ${transcript}
 				ctx.emit({
 					type: "notice",
 					level: "warning",
-					text: `行范围无效，已改为仅引用：${att.path}`,
+					text: `Invalid line range, falling back to path reference: ${att.path}`,
 				});
 				out.push(makeReference());
 				continue;
@@ -680,7 +681,7 @@ ${transcript}
 				ctx.emit({
 					type: "notice",
 					level: "warning",
-					text: `文件过大，已改为仅引用：${att.path}`,
+					text: `File too large, falling back to path reference: ${att.path}`,
 				});
 				out.push(makeReference());
 				continue;
@@ -690,7 +691,7 @@ ${transcript}
 				ctx.emit({
 					type: "notice",
 					level: "warning",
-					text: `二进制文件已改为仅引用：${att.path}`,
+					text: `Binary file, falling back to path reference: ${att.path}`,
 				});
 				out.push(makeReference());
 				continue;
@@ -705,7 +706,7 @@ ${transcript}
 				ctx.emit({
 					type: "notice",
 					level: "warning",
-					text: `选中行超出文件范围，已改为仅引用：${att.path}`,
+					text: `Selected lines are out of range, falling back to path reference: ${att.path}`,
 				});
 				out.push(makeReference());
 				continue;
@@ -741,7 +742,7 @@ ${transcript}
 				ctx.emit({
 					type: "notice",
 					level: "warning",
-					text: `文件过大，已改为仅引用：${att.path}`,
+					text: `File too large, falling back to path reference: ${att.path}`,
 				});
 				out.push(makeReference());
 				continue;
@@ -751,7 +752,7 @@ ${transcript}
 				ctx.emit({
 					type: "notice",
 					level: "warning",
-					text: `二进制文件已改为仅引用：${att.path}`,
+					text: `Binary file, falling back to path reference: ${att.path}`,
 				});
 				out.push(makeReference());
 				continue;
@@ -770,7 +771,7 @@ ${transcript}
 			ctx.emit({
 				type: "notice",
 				level: "warning",
-				text: `二进制文件已跳过（仅引用路径）：${att.path}`,
+				text: `Skipped binary file (path reference only): ${att.path}`,
 			});
 			out.push(makeReference());
 			continue;

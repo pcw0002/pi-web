@@ -1,7 +1,7 @@
 {
   "name": "pi-web-ui",
   "version": "0.44.2",
-  "description": "Web chat interface for the pi coding agent, powered by the pi SDK (@earendil-works/pi-coding-agent) — one-command run, Docker/systemd/launchd deployable",
+  "description": "Pi-Web — pi coding-agent UI with a Review tab for line comments on git diffs",
   "license": "MIT",
   "author": {
     "name": "xingshuyin",
@@ -11,15 +11,16 @@
   "bin": {
     "pi-web-ui": "bin/pi-web-ui.mjs"
   },
-  "main": "electron/main.mjs",
+  "main": "dist/server/index.js",
   "files": [
     "bin/",
     "dist/",
     "web/dist/",
     "web/public/",
     "themes/",
-    "deploy/",
     "extensions/",
+    "prompts/",
+    "skills/",
     "README.md",
     "LICENSE"
   ],
@@ -35,7 +36,7 @@
   ],
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/xing-shuyin/pi-web-ui.git"
+    "url": "git+https://github.com/pcw0002/pi-web.git"
   },
   "pi": {
     "extensions": [
@@ -59,13 +60,7 @@
     "test:smoke": "node tests/run-smoke.mjs",
     "check:protocol": "node scripts/check-protocol-sync.mjs",
     "test:freeze": "node tests/freeze-test.mjs",
-    "start": "node dist/server/index.js",
-    "start:electron": "electron .",
-    "build:electron": "electron-builder build",
-    "build:electron:mac": "electron-builder build --mac",
-    "build:electron:win": "electron-builder build --win",
-    "build:electron:linux": "electron-builder build --linux",
-    "publish:electron": "electron-builder build --publish always"
+    "start": "node dist/server/index.js"
   },
   "dependencies": {
     "@earendil-works/pi-coding-agent": "^0.84.2",
@@ -98,13 +93,9 @@
     "tsx": "^4.19.2",
     "typescript": "^5.7.2",
     "vite": "^6.0.3",
-    "vitest": "^4.1.11",
-    "electron": "^41.0.0",
-    "electron-builder": "^25.0.0",
-    "electron-updater": "^6.0.0"
+    "vitest": "^4.1.11"
   },
   "allowScripts": {
-    "node-pty@1.1.0": true,
-    "electron@41.10.7": true
+    "node-pty@1.1.0": true
   }
 }

@@ -81,8 +81,8 @@ Follow these rules:
 2. Describe the layout in reading order: headers, paragraphs, lists, tables, buttons, panels — say what appears where.
 3. For tables/charts/diagrams: read axes, scales (note log scale), legend entries, series names, highlighted points and their coordinates, and any data values you can discern.
 4. Name entities: people, products, companies, colors, style, objects, actions.
-5. If part of the image is too blurry/low-resolution to read, say "（读不清）" or "unclear" for that part — NEVER invent or guess content you cannot see.
-6. If there are multiple images, address them in order (图 1 / Image 1, 图 2 / Image 2, ...).
+5. If part of the image is too blurry/low-resolution to read, say "unclear" for that part — NEVER invent or guess content you cannot see.
+6. If there are multiple images, address them in order (Image 1, Image 2, ...).
 7. Output only the transcript. No preamble, no commentary about the image itself.`;
 
 /**
@@ -105,9 +105,9 @@ export function buildVisionBridgePrompt(
 /** Per-batch user instruction appended after the images. */
 function buildUserPrompt(count: number): string {
 	if (count <= 1) {
-		return "请逐字转写这张图片的内容，并按上述规则输出结构化文字证据。";
+		return "Transcribe this image verbatim and output structured text evidence using the rules above.";
 	}
-	return `请按图片顺序（图 1 到 图 ${count}）逐张转写每张图片的内容，并按上述规则输出结构化文字证据。`;
+	return `Transcribe each image in order (Image 1 to Image ${count}) and output structured text evidence using the rules above.`;
 }
 
 export interface BridgeImage {
@@ -141,12 +141,12 @@ export async function transcribeImages(
 			const found = findVisionModels(runtime);
 			if (found.length === 0) {
 				throw new Error(
-					"未找到可用的视觉模型（models.json 中没有任何 input 含 image 的模型）",
+					"No vision model available (no model in models.json with image input)",
 				);
 			}
 			return runtime.getModel(found[0].provider, found[0].id);
 		})();
-	if (!model) throw new Error("视觉模型不可用（ModelRuntime.getModel 返回空）");
+	if (!model) throw new Error("Vision model unavailable (ModelRuntime.getModel returned empty)");
 
 	const ac = new AbortController();
 	const timer = setTimeout(() => ac.abort(), TRANSCRIBE_TIMEOUT_MS);
@@ -179,7 +179,7 @@ export async function transcribeImages(
 		});
 		if (msg.stopReason === "error" || msg.stopReason === "aborted") {
 			throw new Error(
-				msg.errorMessage || `视觉模型异常终止（${msg.stopReason}）`,
+				msg.errorMessage || `Vision model stopped (${msg.stopReason})`,
 			);
 		}
 		const text = msg.content
@@ -188,7 +188,7 @@ export async function transcribeImages(
 			.join("\n")
 			.trim();
 		if (!text) {
-			throw new Error("视觉模型返回了空的转写结果");
+			throw new Error("Vision model returned an empty transcription");
 		}
 		return text;
 	} finally {

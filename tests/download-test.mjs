@@ -18,7 +18,7 @@ import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
-// fileURLToPath: URL.pathname 在 Windows 下是 /E:/... 形式，直接当 cwd 会失败
+// fileURLToPath: URL.pathname on Windows is /E:/...; using it as cwd directly fails
 const REPO_ROOT = fileURLToPath(new globalThis.URL("../", import.meta.url));
 
 const HEADLESS = CHROME_PATH;
@@ -26,11 +26,11 @@ const PORT = 8899;
 const URL = `http://localhost:${PORT}`;
 const PROJ = REPO_ROOT;
 
-// Workspace with a "no-reputation" binary-ish file with a Chinese name —
-// the worst case for Chrome's Safe Browsing block.
+// Workspace with a "no-reputation" binary-ish file — the worst case for
+// Chrome's Safe Browsing block.
 const WS = mkdtempSync(join(tmpdir(), "pi-dl-test-"));
-const CONTENT = "zipcontent-测试内容";
-writeFileSync(join(WS, "报告.zip"), CONTENT);
+const CONTENT = "zipcontent-test-payload";
+writeFileSync(join(WS, "report.zip"), CONTENT);
 writeFileSync(join(WS, "notes.txt"), "hello blob download\n");
 
 let failures = 0;
@@ -68,7 +68,7 @@ await page.goto(URL);
 await page.waitForSelector(".panel-right .file-item.file", { timeout: 15000 });
 
 const row = page.locator(".panel-right .file-item.file", {
-	hasText: "报告.zip",
+	hasText: "report.zip",
 });
 await row.hover();
 await sleep(300);
@@ -82,7 +82,7 @@ if (dl) {
 	check("download completed", failure === null, `failure=${failure}`);
 	check(
 		"downloaded filename preserved",
-		(dl.suggestedFilename() ?? "").includes("报告.zip"),
+		(dl.suggestedFilename() ?? "").includes("report.zip"),
 		dl.suggestedFilename(),
 	);
 	const saved = await dl.path();

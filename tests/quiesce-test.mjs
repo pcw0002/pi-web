@@ -113,8 +113,8 @@ function openWs(origin, path = "/ws") {
 			clearTimeout(timer);
 			// handshake + attach
 			ws.send(JSON.stringify({ type: "hello", clientId: "tester" }));
-			// 首次创建 ClientSession 含 runtime 初始化，负载高时可能超 1s ——
-			// 给足握手+首帧 snapshot 时间（总上限仍由外层 4s timer 兒底）。
+			// first ClientSession create includes runtime init and may exceed 1s under load —
+			// give handshake + first-frame snapshot enough time (outer 4s timer is still the cap).
 			setTimeout(() => resolvePromise({ opened, closed, code: undefined, messages }), 2500);
 		});
 		ws.on("message", (d) => {
@@ -149,7 +149,7 @@ async function sendPromptAndCheck(origin) {
 			const m = JSON.parse(d.toString());
 			if (m.type === "ready") {
 				ready = true;
-				ws.send(JSON.stringify({ type: "prompt", text: "你好，这是测试消息" }));
+				ws.send(JSON.stringify({ type: "prompt", text: "hello, this is a test message" }));
 			}
 			if (m.type === "notice") notices.push(m);
 		});

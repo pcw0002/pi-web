@@ -1,17 +1,17 @@
 /**
- * webmail 服务端入口 —— 真实可用的 IMAP/SMTP 邮件管理插件。
+ * webmail server entry — production-ready IMAP/SMTP mail management plugin.
  *
- * 能力：
- *  - 收件：IMAP（imapflow）列出/搜索/阅读/标记/删除邮件
- *  - 发件：SMTP（nodemailer）
- *  - 新邮件通知：周期轮询 INBOX 未读，新增即 host.notify + 推给插件视图
- *  - AI 工具：config.aiEnabled 开启后经 host.registerAgentTool 注册
- *    mail_list / mail_read / mail_search / mail_send / mail_manage / mail_folders，
- *    关闭即注销——「让 AI 管理邮件」随时可开关。
+ * Capabilities:
+ *  - Incoming: IMAP (imapflow) list/search/read/flag/delete mail
+ *  - Outgoing: SMTP (nodemailer)
+ *  - New-mail notify: periodic poll of INBOX Unseen; each new one is host.notify + push to the view
+ *  - AI tools: when config.aiEnabled, register via host.registerAgentTool
+ *    mail_list / mail_read / mail_search / mail_send / mail_manage / mail_folders.
+ *    Turning it off unregisters them — "let AI manage mail" can be toggled at any time.
  *
- * 凭据存 <dataDir>/plugins/webmail/config.json（本机明文，与 pi auth.json 同级安全模型）。
- * 依赖 imapflow/mailparser/nodemailer 不随包分发：首次激活尝试自动 npm 安装，
- * 失败时视图里会出现「安装依赖」按钮手动触发。
+ * Credentials live in <dataDir>/plugins/webmail/config.json (plaintext on this machine, same model as pi auth.json).
+ * imapflow/mailparser/nodemailer are not shipped: on first activate, try auto npm install;
+ * on failure the view shows an Install deps button to trigger it manually.
  */
 import { readFile, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
@@ -20,9 +20,9 @@ import { spawn } from "node:child_process";
 import { createRequire } from "node:module";
 
 const CONFIG_FILE = "config.json";
-/** 阅读正文上限（字符），防超大 HTML 撑爆上下文。 */
+/** read-body cap（chars），guard against huge HTML blow the context window。 */
 const BODY_LIMIT = 16000;
-/** 搜索时最多拉取的信封数量。 */
+/** max envelopes to fetch when searching。 */
 const SEARCH_SCAN = 1000;
 
 const DEFAULT_CONFIG = {
@@ -66,7 +66,7 @@ async function saveConfig(dir, cfg) {
 	await writeFile(join(dir, CONFIG_FILE), JSON.stringify(cfg, null, "\t"), "utf8");
 }
 
-/** 找到能用的 npm CLI：优先 require 解析 npm 包内的 cli.js（免 shell），退回 PATH。 */
+/** Find a usable npm CLI: prefer require() of the npm package cli.js (no shell), else PATH. */
 function resolveNpmCli() {
 	try {
 		return createRequire(import.meta.url).resolve("npm/bin/npm-cli.js");
@@ -80,7 +80,7 @@ export default {
 		const st = {
 			config: null,
 			client: null,
-			/** IMAP 操作互斥链（ImapFlow 连接上操作必须串行）。 */
+			/** IMAP operation mutex chain（ImapFlow operations on a connection must be serial）。 */
 			chain: Promise.resolve(),
 			pollTimer: null,
 			pollBusy: false,
@@ -89,24 +89,24 @@ export default {
 			deps: { imapflow: null, mailparser: null, nodemailer: null },
 			depsOk: false,
 			depsInstalling: false,
-			status: "未配置",
+			status: "Not configured",
 			lastCheckAt: 0,
 			unseenTotal: 0,
 			toolUnregister: null,
-			/** registerBackgroundTask 的句柄（后台任务面板里的邮件轮询）。 */
+			/** registerBackgroundTask handle（mail polling in the background-task panel）。 */
 			bgTask: null,
 		};
 
 		// ------------------------------------------------------------------
-		// 配置与状态
+		// config and state
 		// ------------------------------------------------------------------
-		// 机密存储：密码走宿主 host.secrets（AES-256-GCM 加密，明文绝不落盘）；
-		// 旧版宿主无此设施时回退旧的明文 config.json 行为。首次启动把历史
-		// 明文密码一次性迁入机密并从文件剥离。
+		// Secrets storage: passwords go through host.secrets (AES-256-GCM); plaintext never hits disk;
+		// fall back to old plaintext config.json when the host lacks this. On first start, take historical
+		// migrate leftover plaintext passwords into secrets and strip them from the file。
 		const sec = host.secrets;
 
-		/** 从 config.json 读非敏感字段后：剥离文件里的历史明文密码入机密、
-		 *  再用机密回填内存副本（内存需要真实密码供 IMAP/SMTP 连接）。 */
+		/** After reading non-sensitive fields from config.json: strip leftover plaintext passwords into secrets,
+		 *  then refill the in-memory copy from secrets（memory needs the real password for IMAP/SMTP Connect）。 */
 		async function loadConfigSecure() {
 			const cfg = await loadConfig(host.dir);
 			if (sec?.set) {
@@ -123,14 +123,14 @@ export default {
 					}
 				}
 				if (migrated) {
-					try { await saveConfig(host.dir, cfg); } catch {} // 剥离后的干净配置回写
-					host.log("已将明文密码迁移到加密存储");
+					try { await saveConfig(host.dir, cfg); } catch {} // write back the stripped clean config
+					host.log("Migrated plaintext passwords into encrypted storage");
 				}
 			}
 			return rehydrate(cfg);
 		}
 
-		/** 用已存机密补齐内存副本（不动用户刚输入的新值）。 */
+		/** fill the in-memory copy from stored secrets（do not overwrite a value the user just typed）。 */
 		function rehydrate(cfg) {
 			if (!sec?.get || !cfg) return cfg;
 			const ip = sec.get("imap_pass");
@@ -151,7 +151,7 @@ export default {
 				lastCheckAt: st.lastCheckAt,
 				aiEnabled: Boolean(c?.aiEnabled),
 				notifyEnabled: c?.notifyEnabled !== false && Boolean(c?.imap?.host),
-				// 脱敏后的配置回显（密码不回传，只报是否存在）
+				// redacted config echo（password is not echoed，only report whether it exists）
 				config: {
 					imap: {
 						host: c?.imap?.host ?? "",
@@ -180,8 +180,8 @@ export default {
 
 		async function applyConfig(next) {
 			if (sec?.set) {
-				// 密码语义：留空(undefined/"") = 沿用已存；有值 = 更新。配置文件
-				// 与notice均不落明文——机密只进 host.secrets。
+				// Password semantics: blank (undefined/"") = keep stored; a value = update. Config file
+				// and notices never persist plaintext — secrets only go into host.secrets.
 				if (next.imap.pass) {
 					try { sec.set("imap_pass", String(next.imap.pass)); } catch {}
 					next.imap.pass = "";
@@ -191,32 +191,32 @@ export default {
 					next.smtp.pass = "";
 				}
 			} else {
-				// 旧宿主兜底：沿用旧明文行为（留空沿用已存值）
+				// old-host fallback：keep the old plaintext behavior（blank keeps the stored value）
 				next.imap.pass = next.imap.pass || st.config?.imap?.pass || "";
 				next.smtp.pass = next.smtp.pass || st.config?.smtp?.pass || "";
 			}
 			st.config = await rehydrate(next);
 			await saveConfig(host.dir, next);
-			if (!st.depsOk && next.imap?.host) installDeps(true); // 刚配置好账号但缺依赖 → 自动补装
+			if (!st.depsOk && next.imap?.host) installDeps(true); // account just configured but deps are missing → auto-install
 			restartPoller();
 			await refreshAiTools();
 			broadcastState();
 		}
 
 		// ------------------------------------------------------------------
-		// 依赖加载 / 自动安装
+		// dep loading / auto install
 		// ------------------------------------------------------------------
 		async function loadDeps() {
 			for (const name of ["imapflow", "mailparser", "nodemailer"]) {
 				try {
 					st.deps[name] = await import(name);
 				} catch (err) {
-					host.log(`依赖 ${name} 未就绪:`, err?.message ?? err);
+					host.log(`dep ${name} not ready:`, err?.message ?? err);
 					st.deps[name] = null;
 				}
 			}
 			st.depsOk = ["imapflow", "mailparser"].every((n) => st.deps[n]);
-			if (!st.depsOk || !st.deps.nodemailer) host.log("提示：在设置里点「安装依赖」完成安装");
+			if (!st.depsOk || !st.deps.nodemailer) host.log("Hint: click "Install dependencies" in settings to finish install");
 			return st.depsOk;
 		}
 
@@ -224,8 +224,8 @@ export default {
 			if (st.depsInstalling) return;
 			st.depsInstalling = true;
 			host.log(`installing deps: imapflow / mailparser / nodemailer${auto ? " (auto)" : ""}`);
-			if (!auto) host.notify("info", "📬 邮件插件：开始安装依赖…");
-			host.notify("info", "📬 邮件插件：开始安装依赖（imapflow / mailparser / nodemailer）…");
+			if (!auto) host.notify("info", "📬 Mail plugin: installing dependencies…");
+			host.notify("info", "📬 Mail plugin: installing dependencies (imapflow / mailparser / nodemailer)…");
 			const pkgs = ["imapflow@latest", "mailparser@latest", "nodemailer@latest"];
 			const npmCli = resolveNpmCli();
 			const child = npmCli
@@ -234,7 +234,7 @@ export default {
 					})
 				: spawn("npm", ["--prefix", host.dir, "install", ...pkgs, "--no-audit", "--no-fund"], {
 						stdio: "ignore",
-						shell: process.platform === "win32", // win 下 npm 是 .cmd，必须 shell
+						shell: process.platform === "win32", // on Windows npm is .cmd, so shell is required
 					});
 			st.installChild = child;
 			child.on("error", (err) => finish(false, err.message));
@@ -247,21 +247,21 @@ export default {
 				if (st.installChild === child) st.installChild = null;
 				if (ok) {
 					await loadDeps();
-					restartPoller(); // 依赖就绪后启动轮询
+					restartPoller(); // start polling once deps are ready
 					await refreshAiTools();
 				}
 				host.notify(
 					ok ? "success" : "error",
 					ok
-						? "📬 邮件插件依赖安装完成"
-						: `📬 邮件插件依赖安装失败（${why}）——请在插件目录手动执行 npm install，或在设置面板重试「安装依赖」`,
+						? "📬 Mail plugin dependencies installed"
+						: `📬 Mail plugin dependency install failed（${why}）——please run this in the plugin directory npm install，or retry from Settings「Install deps」`,
 				);
 				broadcastState();
 			}
 		}
 
 		// ------------------------------------------------------------------
-		// IMAP 基础设施：互斥串行 + 惰性连接
+		// IMAP infrastructure：mutex serial + lazy connect
 		// ------------------------------------------------------------------
 		function serialized(fn) {
 			const run = st.chain.then(() => fn(), () => fn());
@@ -282,13 +282,13 @@ export default {
 					/* already dead */
 				}
 			}
-			if (why) host.log("连接断开:", why);
+			if (why) host.log("Disconnected:", why);
 		}
 
 		async function ensureClient() {
 			const c = st.config?.imap;
-			if (!st.deps.imapflow) throw new Error("依赖未安装：请在设置面板点「安装依赖」");
-			if (!c?.host || !c?.user) throw new Error("尚未配置 IMAP 账号");
+			if (!st.deps.imapflow) throw new Error("Dependencies not installed: click "Install dependencies" in settings");
+			if (!c?.host || !c?.user) throw new Error("IMAP account not configured yet");
 			if (st.client?.usable) return st.client;
 			dropClient();
 			const { ImapFlow } = st.deps.imapflow;
@@ -302,11 +302,11 @@ export default {
 			client.on("error", (err) => dropClient(err?.message));
 			await client.connect();
 			st.client = client;
-			st.status = "已连接";
+			st.status = "Connected";
 			return client;
 		}
 
-		/** 打开 folder 并执行 fn（fn 内可用 client 的 mailbox 级 API），结束后释放锁。 */
+		/** Open folder and run fn (fn may use the client's mailbox APIs); release the lock afterwards. */
 		async function withMailbox(folder, fn) {
 			const client = await ensureClient();
 			const lock = await client.getMailboxLock(folder || "INBOX");
@@ -331,7 +331,7 @@ export default {
 				from: envFrom(msg.envelope),
 				fromName: envName(msg.envelope),
 				to: (msg.envelope?.to ?? []).map((a) => a.address).join(", "),
-				subject: msg.envelope?.subject || "(无主题)",
+				subject: msg.envelope?.subject || "(no subject)",
 				date: msg.envelope?.date ? new Date(msg.envelope.date).toISOString() : "",
 				seen: Boolean(msg.flags?.has("\\Seen")),
 				size: msg.size ?? 0,
@@ -339,7 +339,7 @@ export default {
 		}
 
 		// ------------------------------------------------------------------
-		// 邮件操作（UI 与 AI 工具共用同一套实现）
+		// Mail operations (UI and AI tools share the same implementation)
 		// ------------------------------------------------------------------
 		async function listMails({ folder = "INBOX", limit = 30, unseenOnly = false } = {}) {
 			return withMailbox(folder, async (client) => {
@@ -365,7 +365,7 @@ export default {
 		async function searchMails({ query, folder = "INBOX", limit = 20 } = {}) {
 			const q = String(query ?? "").trim().toLowerCase();
 			if (!q) return [];
-			// 客户端过滤信封（subject/from/to），避开各家 IMAP SEARCH 方言差异
+			// client-side envelope filter（subject/from/to），avoid vendor IMAP SEARCH dialect differences
 			const pool = await listMails({ folder, limit: SEARCH_SCAN });
 			return pool
 				.filter((m) =>
@@ -377,16 +377,16 @@ export default {
 		}
 
 		async function readMail({ folder = "INBOX", uid } = {}) {
-			if (!uid) throw new Error("缺少 uid");
+			if (!uid) throw new Error("Missing uid");
 			return withMailbox(folder, async (client) => {
-				// 注意：第三个参数 {uid:true} 才表示按 UID 取信——放查询参数里
-				// 会被当成序号，导致“列表能看、点开未找到”（UID > 邮件总数时必现）。
+				// Note：the third argument {uid:true} means fetch by UID fetch the message——put it in the query params
+				// would be treated as a sequence number — list works, open-then-not-found (when UID > mailbox size).
 				const msg = await client.fetchOne(
 					String(uid),
 					{ envelope: true, flags: true, source: true },
 					{ uid: true },
 				);
-				if (!msg || !msg.source) throw new Error(`未找到 uid=${uid}`);
+				if (!msg || !msg.source) throw new Error(`No message for uid=${uid}`);
 				const meta = summarize(msg);
 				const raw = msg.source;
 				const { simpleParser } = st.deps.mailparser;
@@ -428,10 +428,10 @@ export default {
 			const list = (Array.isArray(uids) ? uids : [uids]).map(String);
 			if (list.length === 0) return { deleted: 0 };
 			return withMailbox(folder, async (client) => {
-				// 有废纸篓就移过去（可恢复），没有才硬删
+				// if a trash folder exists, move there（recoverable），otherwise hard-delete
 				let trash = null;
 				for await (const f of client.list()) {
-					if (f.specialUse === "\\Trash" || /^(trash|deleted|deleted messages|已删除)/i.test(f.path)) {
+					if (f.specialUse === "\\Trash" || /^(trash|deleted|deleted messages|Deleted)/i.test(f.path)) {
 						trash = f.path;
 						break;
 					}
@@ -449,9 +449,9 @@ export default {
 
 		async function sendMail({ to, cc, subject, body } = {}) {
 			const nd = st.deps.nodemailer;
-			if (!nd) throw new Error("依赖未安装：请在设置面板点「安装依赖」");
+			if (!nd) throw new Error("Dependencies not installed: click "Install dependencies" in settings");
 			const c = st.config?.smtp;
-			if (!c?.host || !c?.user) throw new Error("尚未配置 SMTP 账号");
+			if (!c?.host || !c?.user) throw new Error("SMTP account not configured yet");
 			const transport = nd.createTransport({
 				host: c.host,
 				port: Number(c.port) || 465,
@@ -462,7 +462,7 @@ export default {
 				from: c.from || c.user,
 				to: String(to ?? ""),
 				cc: cc ? String(cc) : undefined,
-				subject: String(subject ?? "(无主题)"),
+				subject: String(subject ?? "(no subject)"),
 				text: String(body ?? ""),
 			});
 			return { messageId: info.messageId, accepted: info.accepted };
@@ -475,7 +475,7 @@ export default {
 		}
 
 		// ------------------------------------------------------------------
-		// 新邮件轮询通知
+		// new-mail poll notify
 		// ------------------------------------------------------------------
 		async function pollOnce() {
 			if (!st.config?.imap?.host || !st.depsOk || st.pollBusy) return;
@@ -494,12 +494,12 @@ export default {
 							.slice(0, 3)
 							.map((m) => `${m.fromName || m.from}: ${m.subject}`);
 					} catch {
-						/* 拿不到主题就只报数量 */
+						/* if subject is missing, report the count only */
 					}
 					if (st.config.notifyEnabled !== false) {
 						host.notify(
 							"info",
-							`📬 ${fresh.length} 封新邮件${subjects.length ? ` — ${subjects.join(" · ")}` : ""}`,
+							`📬 ${fresh.length}  new message(s)${subjects.length ? ` — ${subjects.join(" · ")}` : ""}`,
 						);
 					}
 					host.broadcast({
@@ -511,9 +511,9 @@ export default {
 				}
 				st.firstPollDone = true;
 				st.lastUnseenUids = new Set(uids);
-				st.status = "已连接";
+				st.status = "Connected";
 			} catch (err) {
-				st.status = `连接失败：${err?.message ?? err}`;
+				st.status = `Connection failed:${err?.message ?? err}`;
 				dropClient();
 			} finally {
 				st.pollBusy = false;
@@ -529,14 +529,14 @@ export default {
 			const sec = Math.max(15, Math.floor(Number(st.config?.pollSec) || 60));
 			if (st.config?.imap?.host && st.depsOk) {
 				st.pollTimer = setInterval(() => void serialized(pollOnce), sec * 1000);
-				void serialized(pollOnce); // 立即来一轮
-				// 常驻任务进「后台任务」面板：可见 + 可一键停止轮询。
-				if (st.bgTask) st.bgTask.update({ label: "📬 邮件轮询", status: `每 ${sec}s` });
+				void serialized(pollOnce); // run one round immediately
+				// Standing task in the background-tasks panel: visible + one-click stop polling.
+				if (st.bgTask) st.bgTask.update({ label: "📬 Mail poll", status: `every ${sec}s` });
 				else {
 					st.bgTask = host.registerBackgroundTask?.({
 						id: "mail-poll",
-						label: "📬 邮件轮询",
-						status: `每 ${sec}s`,
+						label: "📬 Mail poll",
+						status: `every ${sec}s`,
 						stop: () => {
 							if (st.pollTimer) clearInterval(st.pollTimer);
 							st.pollTimer = null;
@@ -545,7 +545,7 @@ export default {
 					});
 				}
 			} else {
-				// 未配置/依赖未就绪：不轮询，任务移出面板（若有）。
+				// Not configured/deps not ready：do not poll，remove the task from the panel（if any）。
 				st.bgTask?.unregister?.();
 				st.bgTask = null;
 				broadcastState();
@@ -553,47 +553,47 @@ export default {
 		}
 
 		// ------------------------------------------------------------------
-		// AI 工具注册（config.aiEnabled 开关控制）
+		// AI tool registration（config.aiEnabled toggle-controlled）
 		// ------------------------------------------------------------------
 		const FOLDER_PARAM = {
 			type: "string",
-			description: "邮箱文件夹路径，默认 INBOX",
+			description: "Mailbox folder path, default INBOX",
 		};
 
 		function aiTools() {
 			return [
 				{
 					name: "mail_list",
-					label: "列出新邮件",
+					label: "List recent mail",
 					description:
-						"列出邮箱里的最近邮件摘要（发件人/主题/日期/是否已读）。用户让你查邮件、看收件箱时用它。",
+						"List recent mailbox summaries (from/subject/date/read). Use it when the user asks to check mail or the inbox.",
 					parameters: {
 						type: "object",
 						properties: {
 							folder: FOLDER_PARAM,
-							limit: { type: "number", description: "返回条数，默认 30，最大 200" },
-							unseen_only: { type: "boolean", description: "只看未读，默认 false" },
+							limit: { type: "number", description: "How many to return, default 30, max 200" },
+							unseen_only: { type: "boolean", description: "Unread only, default false" },
 						},
 					},
 					execute: async (_id, args) => {
 						const mails = await listMails(args);
-						if (mails.length === 0) return "邮箱为空（或没有未读）。";
+						if (mails.length === 0) return "Mailbox is empty (or has no unread mail).";
 						return mails
 							.map(
 								(m) =>
-									`#${m.uid}${m.seen ? "" : " [未读]"} ${m.date.slice(0, 16).replace("T", " ")} ${m.fromName || m.from} — ${m.subject}`,
+									`#${m.uid}${m.seen ? "" : " [Unread]"} ${m.date.slice(0, 16).replace("T", " ")} ${m.fromName || m.from} — ${m.subject}`,
 							)
 							.join("\n");
 					},
 				},
 				{
 					name: "mail_read",
-					label: "读一封邮件",
-					description: "按 uid 读取一封邮件的完整正文（纯文本，超长截断）。",
+					label: "Read a message",
+					description: "Read one message body by uid (plain text, truncated if long).",
 					parameters: {
 						type: "object",
 						properties: {
-							uid: { type: "number", description: "mail_list 返回的 #编号" },
+							uid: { type: "number", description: "# id from mail_list" },
 							folder: FOLDER_PARAM,
 						},
 						required: ["uid"],
@@ -601,12 +601,12 @@ export default {
 					execute: async (_id, args) => {
 						const m = await readMail(args);
 						return [
-							`主题: ${m.subject}`,
-							`发件人: ${m.fromName ? `${m.fromName} <${m.from}>` : m.from}`,
-							`日期: ${m.date}`,
-							m.hasAttachments ? "(含附件)" : "",
+							`Subject: ${m.subject}`,
+							`From: ${m.fromName ? `${m.fromName} <${m.from}>` : m.from}`,
+							`Date: ${m.date}`,
+							m.hasAttachments ? "(has attachments)" : "",
 							"",
-							m.text + (m.truncated ? "\n…(截断)" : ""),
+							m.text + (m.truncated ? "\n…(truncated)" : ""),
 						]
 							.filter(Boolean)
 							.join("\n");
@@ -614,63 +614,63 @@ export default {
 				},
 				{
 					name: "mail_search",
-					label: "搜索邮件",
-					description: "在最近邮件里按关键词搜索（匹配主题/发件人/收件人）。",
+					label: "Search mail",
+					description: "Search recent mail by keyword (subject / from / to).",
 					parameters: {
 						type: "object",
 						properties: {
-							query: { type: "string", description: "关键词" },
+							query: { type: "string", description: "Keyword" },
 							folder: FOLDER_PARAM,
-							limit: { type: "number", description: "返回条数，默认 20" },
+							limit: { type: "number", description: "How many to return, default 20" },
 						},
 						required: ["query"],
 					},
 					execute: async (_id, args) => {
 						const mails = await searchMails(args);
-						if (mails.length === 0) return `没有匹配 “${args.query}” 的邮件。`;
+						if (mails.length === 0) return `No mail matching "${args.query}".`;
 						return mails
 							.map(
 								(m) =>
-									`#${m.uid}${m.seen ? "" : " [未读]"} ${m.date.slice(0, 16).replace("T", " ")} ${m.fromName || m.from} — ${m.subject}`,
+									`#${m.uid}${m.seen ? "" : " [Unread]"} ${m.date.slice(0, 16).replace("T", " ")} ${m.fromName || m.from} — ${m.subject}`,
 							)
 							.join("\n");
 					},
 				},
 				{
 					name: "mail_send",
-					label: "发送邮件",
-					description: "通过已配置的 SMTP 发一封文本邮件。",
+					label: "Send mail",
+					description: "Send a plain-text message via the configured SMTP.",
 					promptGuidelines: [
-						"发送前把收件人/主题/正文给用户确认一次再调用。",
+						"Confirm recipient/subject/body with the user once before calling.",
 					],
 					parameters: {
 						type: "object",
 						properties: {
-							to: { type: "string", description: "收件人邮箱地址" },
-							cc: { type: "string", description: "抄送（可选）" },
-							subject: { type: "string", description: "主题" },
-							body: { type: "string", description: "正文（纯文本）" },
+							to: { type: "string", description: "Recipient address" },
+							cc: { type: "string", description: "CC (optional)" },
+							subject: { type: "string", description: "Subject" },
+							body: { type: "string", description: "Body (plain text)" },
 						},
 						required: ["to", "body"],
 					},
 					execute: async (_id, args) => {
 						const r = await sendMail(args);
-						return `已发送至 ${(r.accepted ?? []).join(", ")}`;
+						return `Sent to ${(r.accepted ?? []).join(", ")}`;
 					},
 				},
 				{
 					name: "mail_manage",
-					label: "管理邮件状态",
-					description: '批量标记已读/未读或删除邮件。action 取 "seen" | "unseen" | "delete"。',
+					label: "Manage message state",
+					description: 'Batch mark read/unread or delete. action is "seen" | "unseen" | "delete".',
 					parameters: {
 						type: "object",
 						properties: {
 							action: {
 								type: "string",
 								enum: ["seen", "unseen", "delete"],
-								description: "操作类型",
+								description: "Action type",
 							},
-							uids: { type: "array", items: { type: "number" }, description: "邮件 uid 列表" },
+							uids: { type: "array", items: { type: "number" }, description: "Message uid list" },
 							folder: FOLDER_PARAM,
 						},
 						required: ["action", "uids"],
@@ -678,16 +678,16 @@ export default {
 					execute: async (_id, args) => {
 						if (args.action === "delete") {
 							const r = await deleteMails(args);
-							return `已删除 ${r.deleted} 封${r.trash ? `（移入 ${r.trash}）` : ""}`;
+							return `Deleted ${r.deleted} message(s)${r.trash ? ` (moved to ${r.trash})` : ""}`;
 						}
 						const r = await markMails({ ...args, seen: args.action === "seen" });
-						return `已更新 ${r.changed} 封邮件状态`;
+						return `Updated ${r.changed} message(s) status`;
 					},
 				},
 				{
 					name: "mail_folders",
-					label: "列出文件夹",
-					description: "列出邮箱的全部文件夹路径（收件箱/归档/废纸篓等）。",
+					label: "List folders",
+					description: "List every mailbox folder path (inbox / archive / trash, etc.).",
 					parameters: { type: "object", properties: {} },
 					execute: async () => {
 						return withMailbox("INBOX", async (client) => {
@@ -708,12 +708,12 @@ export default {
 			if (st.config?.aiEnabled && st.depsOk) {
 				const offs = aiTools().map((t) => host.registerAgentTool(t));
 				st.toolUnregister = () => offs.forEach((off) => off());
-				host.log("AI 邮箱工具已开启");
+				host.log("AI mailbox tools enabled");
 			}
 		}
 
 		// ------------------------------------------------------------------
-		// 视图消息协议
+		// view message protocol
 		// ------------------------------------------------------------------
 		const offMsg = host.onMessage((payload, from) => {
 			const msg = payload ?? {};
@@ -732,7 +732,7 @@ export default {
 								smtp: { ...DEFAULT_CONFIG.smtp, ...(msg.config?.smtp ?? {}) },
 							});
 							host.sendTo(from, { kind: "result", ok: true, action: "save_config" });
-							host.notify("info", "📬 邮箱配置已保存并生效");
+							host.notify("info", "📬 Mail config saved and applied");
 						} catch (err) {
 							host.sendTo(from, {
 								kind: "result",
@@ -757,31 +757,31 @@ export default {
 				case "read":
 					void serialized(() => readMail(msg))
 						.then((mail) => host.broadcast({ kind: "mail", mail }))
-						.catch((err) => host.notify("error", `📬 读取失败：${err?.message ?? err}`));
+						.catch((err) => host.notify("error", `📬 Read failed:${err?.message ?? err}`));
 					break;
 				case "search":
 					void serialized(() => searchMails(msg))
 						.then((mails) => host.broadcast({ kind: "mails", mails }))
-						.catch((err) => host.notify("error", `📬 搜索失败：${err?.message ?? err}`));
+						.catch((err) => host.notify("error", `📬 Search failed:${err?.message ?? err}`));
 					break;
 				case "mark":
 					void serialized(() => markMails(msg))
 						.then((r) => host.broadcast({ kind: "result", ok: true, action: "mark", ...r }))
-						.catch((err) => host.notify("error", `📬 标记失败：${err?.message ?? err}`));
+						.catch((err) => host.notify("error", `📬 Mark failed:${err?.message ?? err}`));
 					break;
 				case "delete":
 					void serialized(() => deleteMails(msg))
 						.then((r) => host.broadcast({ kind: "result", ok: true, action: "delete", ...r }))
-						.catch((err) => host.notify("error", `📬 删除失败：${err?.message ?? err}`));
+						.catch((err) => host.notify("error", `📬 Delete failed:${err?.message ?? err}`));
 					break;
 				case "send":
 					void sendMail(msg)
 						.then(() => {
-							host.notify("info", `📬 已发送给 ${msg.to}`);
+							host.notify("info", `📬 Sent to ${msg.to}`);
 							host.broadcast({ kind: "result", ok: true, action: "send" });
 						})
 						.catch((err) =>
-							host.notify("error", `📬 发送失败：${err?.message ?? err}`),
+							host.notify("error", `📬 Send failed:${err?.message ?? err}`),
 						);
 					break;
 				default:
@@ -790,24 +790,24 @@ export default {
 		});
 
 		// ------------------------------------------------------------------
-		// 启动
+		// Startup
 		// ------------------------------------------------------------------
 		void (async () => {
 			try {
 				st.config = await loadConfigSecure();
 				await loadDeps();
-				if (!st.depsOk) installDeps(true); // 缺依赖就自动装，不等配置保存
+				if (!st.depsOk) installDeps(true); // auto-install if deps are missing，do not wait for config save
 				await refreshAiTools();
 				restartPoller();
 				broadcastState();
-				host.log("activated", st.depsOk ? "(依赖就绪)" : "(装依赖中)");
+				host.log("activated", st.depsOk ? "(deps ready)" : "(installing deps)");
 			} catch (err) {
 				host.log("activation failed:", err);
 			}
 		})();
 
-		// 新客户端接入时主动推送完整状态（服务端唯一事实源）；
-		// host.onAttach 在旧版宿主上不存在——可选链兼容，客户端拉取仍作兑底
+		// on new client attach, actively push the full state（server is the single source of truth）；
+		// host.onAttach does not exist on older hosts——optional-chaining compatible，the client can still pull as a fallback
 		const offAttach = host.onAttach?.((clientId) => {
 			host.sendTo(clientId, { kind: "state", state: publicState() });
 		});
@@ -819,7 +819,7 @@ export default {
 			try { st.bgTask?.unregister?.(); } catch {}
 			if (st.pollTimer) clearInterval(st.pollTimer);
 			try {
-				st.installChild?.kill(); // 进行中的依赖安装一并终止，不残留写手
+				st.installChild?.kill(); // also kill an in-flight dependency install，leave no leftover writers
 			} catch {
 				/* already gone */
 			}

@@ -38,10 +38,11 @@ const EMPTY_LIVE = new Map<string, { toolName: string; text: string }>();
 const KEEP_RECENT = 15;
 const COLLAPSE_MIN = 30;
 
-/** 惰性窗口化缓冲带：视口上下各多保留 1200px 的真实内容再开始收起。 */
+/** Lazy-windowing buffer: keep 1200px of real content above and below the viewport before collapsing. */
 const LAZY_MARGIN = 1200;
-/** 底部常驻区高度预算（px）：贴底滚动 / 流式输出区域零占位延迟，
- *  但按累计高度截断——单条巨型消息不允许把常驻区撑成半个文档。 */
+/** Height budget (px) for the always-on bottom region: stick-to-bottom / streaming
+ *  area has zero placeholder lag, but we truncate by accumulated height so one
+ *  giant message cannot blow the always-on region into half a document. */
 const ALWAYS_BUDGET = 1600;
 
 function hasToolCall(m: UiMessage): boolean {
@@ -81,7 +82,7 @@ interface MessageListProps {
 	) => void;
 	/** Kill the running bash command from its tool card (agent run continues). */
 	onKillBash?: () => void;
-	/** 思考文本是否换行（设置面板开关；false = 不换行横向滚动）。 */
+	/** Whether thinking text wraps (settings-panel switch; false = no wrap, horizontal scroll). */
 	thinkingWrap?: boolean;
 }
 
@@ -90,13 +91,13 @@ export function MessageList({ state, liveOutputs, toolStatuses, onEdit, onKillBa
 	const scrollRef = useRef<HTMLDivElement>(null);
 	const [stickBottom, setStickBottom] = useState(true);
 	const stickRef = useRef(true);
-	/** 上一帧 scrollTop —— 判定滚动方向（向上 = 用户要离开底部）。 */
+	/** Previous frame's scrollTop — used to detect scroll direction (up = user leaving the bottom). */
 	const prevStRef = useRef(0);
-	/** 用户已主动离开底部：流式结束 / finalize 塌缩时不再自动吸回。 */
+	/** User has actively left the bottom: do not auto-snap back when streaming ends / finalize collapses. */
 	const escapedRef = useRef(false);
 	/** Messages the user expanded from the collapsed view — stay expanded. */
 	const [expanded, setExpanded] = useState<Set<string>>(() => new Set());
-	/** 会话内搜索栏（Ctrl+F / Cmd+F）。 */
+	/** In-conversation search bar (Ctrl+F / Cmd+F). */
 	const [searchOpen, setSearchOpen] = useState(false);
 	/** Persisted messages + the live in-progress assistant message (if any). */
 	const messages = state.streamingMessage
@@ -133,27 +134,30 @@ export function MessageList({ state, liveOutputs, toolStatuses, onEdit, onKillBa
 			? Math.max(0, state.messages.length - KEEP_RECENT)
 			: 0;
 
-	// ---- 惰性窗口化（lazy windowing，纯函数见 lazy-window.ts）----------------
-	// 视口缓冲带之外的重型消息替换为等高占位 div；滚动临近时换回真实内容并
-	// 在同一帧内补偿 scrollTop。占位保留 data-msg-id，导航/跳转/搜索不受影响。
-	/** 当前处于占位状态的消息 id。 */
+	// ---- Lazy windowing (pure functions in lazy-window.ts) --------------------
+	// Heavy messages outside the viewport buffer become equal-height placeholder
+	// divs; scrolling nearby swaps real content back in and compensates
+	// scrollTop in the same frame. Placeholders keep data-msg-id so nav / jump /
+	// search are unaffected.
+	/** Message ids currently in the placeholder state. */
 	const [hidden, setHidden] = useState<Set<string>>(() => new Set());
-	/** 用户跳转过的消息——永久保持真实渲染，避免占位符闪现。 */
+	/** Messages the user has jumped to — stay real-rendered forever to avoid placeholder flicker. */
 	const [pinned, setPinned] = useState<Set<string>>(() => new Set());
-	/** 已实测的消息高度（隐藏时用作占位高度）。 */
+	/** Measured message heights (used as placeholder height while hidden). */
 	const heightsRef = useRef(new Map<string, number>());
-	/** 所有受管外层元素（sweep 测量用；挂载时注册，消息移除时清理）。 */
+	/** Every managed outer element (for sweep measurement; registered on mount, cleaned when the message is gone). */
 	const elsRef = useRef(new Map<string, HTMLDivElement>());
 	const sweepRafRef = useRef(0);
-	// 镜像最新值，供 rAF 回调 / 事件处理器读取而不重建（沿用 questionsRef 模式）
+	// Mirror latest values so rAF callbacks / event handlers can read them without rebuilding (same pattern as questionsRef)
 	const hiddenRef = useRef(hidden);
 	hiddenRef.current = hidden;
-	/** 短会话与搜索打开期间不做窗口化（全量渲染，行为与旧版一致）。 */
+	/** Skip windowing for short chats and while search is open (full render, same as the old behavior). */
 	const virtualOn = state.messages.length > COLLAPSE_MIN && !searchOpen;
 	const virtualOnRef = useRef(virtualOn);
 	virtualOnRef.current = virtualOn;
-	// 底部常驻区（永不占位）：随每次渲染按预算重算（读取最新实测高度），
-	// 首次全量测量后巨型消息会被预算挤出常驻区、参与正常窗口化。
+	// Always-on bottom region (never placeholder'd): recomputed each render from
+	// the budget (using latest measured heights). After the first full measure,
+	// giant messages are pushed out of the always-on set and take part in normal windowing.
 	const alwaysSet = pickAlways(
 		state.messages,
 		heightsRef.current,
@@ -162,7 +166,7 @@ export function MessageList({ state, liveOutputs, toolStatuses, onEdit, onKillBa
 	const alwaysRef = useRef(alwaysSet);
 	alwaysRef.current = alwaysSet;
 
-	/** 全量测量受管元素 → 窗口计划（rAF 节流调用；也用于初始与特殊迁移后）。 */
+	/** Measure every managed element → window plan (rAF-throttled; also used after initial mount and special transitions). */
 	const sweep = useCallback(() => {
 		const root = scrollRef.current;
 		if (!root) return;
@@ -179,14 +183,18 @@ export function MessageList({ state, liveOutputs, toolStatuses, onEdit, onKillBa
 		for (const [id, el] of elsRef.current) {
 			const b = el.getBoundingClientRect();
 			items.push({ id, top: b.top, bottom: b.bottom });
-			// 显示中的元素顺手记录实测高度——pickAlways 的预算与占位高度都靠它；
-			// 只在隐藏时测量的话，「初始就显示」的消息会永远停留在估算值。
+			// Shown elements also record measured height — pickAlways's budget and
+			// placeholder heights both depend on it; measuring only while hidden
+			// would leave "shown from the start" messages stuck on the estimate forever.
 			if (!hiddenRef.current.has(id)) heightsRef.current.set(id, b.bottom - b.top);
 		}
 		const plan = planWindow(items, viewport, alwaysRef.current, hiddenRef.current);
-		// 收起时用刚实测的高度做占位 ⇒ 流总高度不变 ⇒ 无需任何 scrollTop 补偿。
-		// （曾在此做 shrink 补偿：它触发的 scroll 事件会让缓冲带重新罩住刚收起的
-		// 元素 → 再挂载 → 再收起，自搏循环把用户钉在原地永远滚不到底。）
+		// Collapse using the just-measured height as the placeholder ⇒ stream
+		// total height is unchanged ⇒ no scrollTop compensation needed.
+		// (We used to compensate shrink here: the scroll event it fired would
+		// re-cover the just-collapsed element with the buffer band → remount →
+		// collapse again, a self-fight loop that pinned the user in place and
+		// they could never reach the bottom.)
 		for (const id of plan.hide) {
 			const el = elsRef.current.get(id);
 			if (el) heightsRef.current.set(id, el.offsetHeight);
@@ -203,12 +211,12 @@ export function MessageList({ state, liveOutputs, toolStatuses, onEdit, onKillBa
 	}, [sweep]);
 
 
-	// 初始挂载：首帧绘制前就把远端内容换成占位（大会话 attach 不再全量布局绘制）
+	// Initial mount: swap far-away content to placeholders before first paint (large-session attach no longer fully layouts/paints)
 	useLayoutEffect(() => {
 		sweep();
 	}, [sweep]);
 
-	// 搜索关闭瞬间重新收起远端内容（打开期间强制全渲染以兼容 DOM 高亮/Range 收集）
+	// The instant search closes, collapse far-away content again (while open we force a full render so DOM highlight / Range collection work)
 	const prevSearchRef = useRef(searchOpen);
 	useLayoutEffect(() => {
 		if (prevSearchRef.current && !searchOpen) sweep();
@@ -219,14 +227,15 @@ export function MessageList({ state, liveOutputs, toolStatuses, onEdit, onKillBa
 		heightsRef.current.set(id, h);
 	}, []);
 
-	/** 外层元素注册（sweep 测量用）；卸载侧由下方清理 effect 兑底（React 18 的
-	 *  ref(null) 回调拿不到 data-lazy-id，无法定点反注册）。 */
+	/** Register an outer element (for sweep measurement); unmount cleanup is the effect below (React 18's
+	 *  ref(null) callback cannot read data-lazy-id, so we cannot unregister by id). */
 	const attachEl = useCallback((el: HTMLDivElement | null) => {
 		if (el) elsRef.current.set(el.dataset.lazyId ?? "", el);
 	}, []);
 
-	// 消息集或展开状态变化后，清掉已不存在的受管元素 / 高度缓存 / 隐藏项
-	// （依赖用服务端缓存的消息数组——引用稳定，流式增量不会每帧重跑）
+	// After the message set or expand state changes, drop managed elements / height cache / hidden
+	// entries that no longer exist (deps use the server-cached messages array — stable ref, streaming
+	// deltas don't re-run every frame)
 	useEffect(() => {
 		const ids = new Set(state.messages.map((m) => m.id));
 		for (const [id, el] of elsRef.current) {
@@ -313,7 +322,7 @@ export function MessageList({ state, liveOutputs, toolStatuses, onEdit, onKillBa
 		setExpanded((prev) => (prev.has(id) ? prev : new Set(prev).add(id)));
 	}, []);
 
-	// 搜索跳转目标若是折叠的旧消息，先同步展开（flushSync 保证本轮 DOM 就绪）
+	// If a search-jump target is a collapsed old message, expand it first (flushSync so this frame's DOM is ready)
 	const ensureExpanded = useCallback(
 		(id: string) => {
 			const idx = state.messages.findIndex((m) => m.id === id);
@@ -324,7 +333,7 @@ export function MessageList({ state, liveOutputs, toolStatuses, onEdit, onKillBa
 		[state.messages, recentStart, expanded, expand],
 	);
 
-	// Ctrl+F / Cmd+F 打开搜索（可编辑元素内不抢占）
+	// Ctrl+F / Cmd+F opens search (don't steal from editable elements)
 	useEffect(() => {
 		const onKey = (e: KeyboardEvent) => {
 			if (!(e.ctrlKey || e.metaKey) || e.key.toLowerCase() !== "f") return;
@@ -355,8 +364,9 @@ export function MessageList({ state, liveOutputs, toolStatuses, onEdit, onKillBa
 	const jumpTo = useCallback(
 		(id: string) => {
 			const idx = state.messages.findIndex((m) => m.id === id);
-			// 占位中的目标先同步恢复真实渲染（折叠行同步展开），再滚动定位——
-			// flushSync 保证本轮 commit 后 DOM 即为最终形态。
+			// Restore a placeholder'd target to real render first (and expand a
+			// collapsed row), then scroll into place — flushSync so this frame's
+			// commit already has the final DOM.
 			flushSync(() => {
 				if (idx >= 0 && idx < recentStart && !expanded.has(id)) expand(id);
 				setPinned((prev) => (prev.has(id) ? prev : new Set(prev).add(id)));
@@ -378,7 +388,7 @@ export function MessageList({ state, liveOutputs, toolStatuses, onEdit, onKillBa
 					el.classList.remove("msg-flash");
 					void el.offsetWidth; // restart the highlight animation
 					el.classList.add("msg-flash");
-					// 问题跳转 = 主动离开底部；流结束时不要被吸回去
+					// Question jump = actively leaving the bottom; don't snap back when the stream ends
 					if (el !== scrollRef.current?.lastElementChild) escapedRef.current = true;
 				}
 			});
@@ -393,14 +403,17 @@ export function MessageList({ state, liveOutputs, toolStatuses, onEdit, onKillBa
 		prevStRef.current = el.scrollTop;
 		const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
 		if (dSt < -4 && dSt > -500) {
-			// 明确的向上滚动意图：立即松开贴底——即使仍在 80px 阈值内。
-			// 流式期间每个 delta 都会把视口钉回底部，若只看距离阈值，
-			// 用户永远逃不出去（表现为「自己滚动一直弹回来」）。
-			// 大幅负跳变（<-500）不算：那是布局塌缩（finalize 一帧收起巨消息）
-			// 引发的原生 clamp，不是用户手势。
+			// Clear intent to scroll up: release stick-to-bottom immediately —
+			// even if still inside the 80px threshold. While streaming, every
+			// delta pins the viewport to the bottom; if we only looked at the
+			// distance threshold, the user could never escape (felt like
+			// "scrolling myself always bounces back"). Large negative jumps
+			// (<-500) don't count: that is layout collapse (finalize shrinking
+			// a giant message in one frame) triggering native clamp, not a
+			// user gesture.
 						escapedRef.current = true;
 		} else if (nearBottom && dSt >= 0) {
-			escapedRef.current = false; // 滚回了底部
+			escapedRef.current = false; // scrolled back to the bottom
 		}
 		stickRef.current = nearBottom && !escapedRef.current;
 		setStickBottom(stickRef.current);
@@ -408,8 +421,9 @@ export function MessageList({ state, liveOutputs, toolStatuses, onEdit, onKillBa
 		scheduleSweep();
 	}, [updateActiveFromScroll, scheduleSweep]);
 
-	// 流结束兜底：finalize 瞬间 streaming→persisted 切换可能让内容高度塌缩一帧，
-	// 浏览器把视口 clamp 到半路；若用户并未主动离开（!escaped），等布局稳定后吸回底部。
+	// Stream-end fallback: the streaming→persisted switch at finalize may collapse
+	// content height for a frame, and the browser clamps the viewport halfway; if
+	// the user did not actively leave (!escaped), snap back to the bottom once layout settles.
 	const wasStreamingRef = useRef(false);
 	useEffect(() => {
 		const was = wasStreamingRef.current;
@@ -436,7 +450,7 @@ export function MessageList({ state, liveOutputs, toolStatuses, onEdit, onKillBa
 		}
 	}, [messages, state.isStreaming, liveOutputs]);
 
-	// Queued prompts (插队/排队) render as pending bubbles at the list bottom —
+	// Queued prompts (steer / followUp) render as pending bubbles at the list bottom —
 	// include them in the stick-to-bottom deps so a newly queued message is
 	// scrolled into view when the user hasn't left the bottom.
 	const queueSig = state.queue.steering.join("\u0000") + "\u0001" + state.queue.followUp.join("\u0000");
@@ -484,7 +498,7 @@ export function MessageList({ state, liveOutputs, toolStatuses, onEdit, onKillBa
 	useEffect(() => {
 		const update = () => {
 			setRailH(scrollRef.current?.clientHeight ?? 0);
-			scheduleSweep(); // 宽高变化后旧占位高度可能失准，重新评估窗口
+			scheduleSweep(); // After a size change old placeholder heights may be stale — re-evaluate the window
 		};
 		update();
 		window.addEventListener("resize", update);

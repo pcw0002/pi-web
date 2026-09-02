@@ -1,81 +1,88 @@
-# 📝 vscode-editor —— pi-web-ui 编辑器 + SSH 插件（Remote-SSH）
+# 📝 vscode-editor — pi-web-ui editor + SSH plugin (Remote-SSH)
 
-在 pi-web-ui 界面里提供一个类 VSCode 的工作台视图：
+Adds a VS Code-like workbench view to the pi-web-ui UI:
 
-- **多根文件树**：本地工作区 + 已保存的 SSH 主机（同一棵树、同一组标签页）
-- **工作区跟随**：主应用切换项目（set_cwd）后，本地树根目录实时切到新项目——
-  自动清理目录缓存/展开状态、关闭本地标签（有未保存修改会提示），远端 SSH
-  标签与连接不受影响；`.vscode/sftp.json` 每项目独立，切换后自动重读
-- **CodeMirror 6 多标签编辑器**：本地/远程文件同开，语法高亮、Ctrl+S 保存
-  （远程文件经 SFTP 写回）、CRLF 行尾保留、Ctrl+P 快速打开（本地）
-- **底部可拖拽终端面板**：每台已连接主机可开多个 shell（xterm.js），窗口
-  尺寸同步、keepalive 保活；右键远端文件/文件夹可在所在目录打开终端
-- **SFTP 同步**（☁ 菜单）：工作区整体上传/下载、上传当前文件、保存自动上传
-  （uploadOnSave）；配置存工作区 `.vscode/sftp.json`，与 **vscode-sftp / Natizyskunk.sftp**
-  配置格式兼容——可直接把 VS Code 里的 `sftp.json` 拷过来用（Ctrl+S 即生效）。
-  支持的字段：`name` / `host` / `port` / `username` / `password` / `passphrase` /
-  `privateKey` / `privateKeyPath`（支持 `~` 展开，如 `~/.ssh/id_rsa`）/ `remotePath`（即
-  远端根目录）/ `ignore`（glob 排除规则）/ `uploadOnSave` / 旧版 `watcher.autoUpload` /
-  `agent`（如 `$SSH_AUTH_SOCK` 走 ssh-agent）。密码、私钥、agent 三者任选其一即可。
-- **下载到电脑**（右键菜单）：本地文件直下；远端文件/文件夹不经工作区映射、
-  文件夹在远端就地 tar.gz 打包，保存位置自选
+- **Multi-root file tree**: local workspace + saved SSH hosts (one tree, one set of tabs)
+- **Workspace follow**: when the host app switches project (`set_cwd`), the local tree root
+  switches to the new project in real time — directory cache/expanded state is cleared,
+  local tabs are closed (dirty tabs prompt), remote SSH tabs and connections are untouched;
+  `.vscode/sftp.json` is per-project and re-read after the switch
+- **CodeMirror 6 multi-tab editor**: local and remote files open together, syntax
+  highlighting, Ctrl+S save (remote files written back over SFTP), CRLF line endings
+  preserved, Ctrl+P quick-open (local)
+- **Resizable bottom terminal panel**: each connected host can open multiple shells
+  (xterm.js), with window-size sync and keepalive; right-click a remote file/folder to
+  open a terminal in that directory
+- **SFTP sync** (☁ menu): upload/download the whole workspace, upload the current file,
+  auto-upload on save (`uploadOnSave`); config lives in the workspace `.vscode/sftp.json`,
+  compatible with **vscode-sftp / Natizyskunk.sftp** — you can copy `sftp.json` from
+  VS Code and Ctrl+S to apply. Supported fields: `name` / `host` / `port` / `username` /
+  `password` / `passphrase` / `privateKey` / `privateKeyPath` (`~` expansion, e.g.
+  `~/.ssh/id_rsa`) / `remotePath` (remote root) / `ignore` (glob excludes) /
+  `uploadOnSave` / legacy `watcher.autoUpload` / `agent` (e.g. `$SSH_AUTH_SOCK` for
+  ssh-agent). Use any one of password, private key, or agent.
+- **Download to disk** (context menu): local files download directly; remote files/folders
+  skip the workspace mapping; folders are tar.gz-packed on the remote, save location is
+  user-chosen
 
-原独立的 ssh 插件已合并进来：旧 `<pluginDir>/ssh-hosts.json` 主机配置在首次
-激活时自动迁移，无需手工搬。
+The old standalone ssh plugin is merged in: a legacy `<pluginDir>/ssh-hosts.json` host
+list is migrated automatically on first activate.
 
-## 文件树交互
+## File tree interactions
 
-- **原地展开/收起**：点文件夹只加载该目录子列表（带「⏳ 加载中」占位），
-  不整树重绘闪烁；收起零延迟
-- **选中高亮**：点/右键任意行都高亮选中，工具栏 ＋📄/＋📁 以当前选中目录
-  为落点（选文件则落在其所在文件夹）；新建成功后新条目成为选中项
-- **右键菜单**：新建 / 重命名 / 删除 / 双向同步 / 打开终端（scope 感知）
+- **In-place expand/collapse**: clicking a folder loads only that directory's children
+  (with a "⏳ Loading" placeholder), without redrawing the whole tree; collapse is instant
+- **Selection highlight**: click or right-click any row to select it; toolbar ＋📄/＋📁
+  targets the selected directory (or the parent folder if a file is selected); after
+  create, the new entry becomes the selection
+- **Context menu**: new / rename / delete / two-way sync / open terminal (scope-aware)
 
-## 统一范围模型
+## Unified scope model
 
-scope = `"local" | connId`。前端所有文件操作（list/read/write/create/rename/
-delete）携带 scope，远程时自动附加 connId——服务端据此路由到本地 fs 或该
-连接的 SFTP，前后端共用一套代码路径。
+scope = `"local" | connId`. Every front-end file operation (list/read/write/create/rename/
+delete) carries scope; remote calls automatically attach `connId` — the server routes to
+local fs or that connection's SFTP. Front and back share one code path.
 
-## 目录结构
+## Layout
 
 ```
 vscode-editor/
-├── manifest.json        # 插件清单（id/icon/name）
-├── index.mjs            # 服务端入口：本地文件 CRUD / SFTP 同步（.vscode/sftp.json）/
-│                        #   SSH 主机管理 + 连接池 + PTY shell + exec + 远程 SFTP 操作
-├── src/client.js        # 客户端源码（CodeMirror 6 + xterm.js）
-├── build.mjs            # esbuild 打包脚本（xterm CSS 内联为文本）
-├── package.json         # 构建/依赖清单（ssh2 为 devDep，运行时由服务端自动补装）
-└── client/entry.mjs     # 构建产物（自包含 bundle，浏览器直接加载）
+├── manifest.json        # plugin manifest (id/icon/name)
+├── index.mjs            # server entry: local file CRUD / SFTP sync (.vscode/sftp.json) /
+│                        #   SSH host manager + connection pool + PTY shell + exec + remote SFTP
+├── src/client.js        # client source (CodeMirror 6 + xterm.js)
+├── build.mjs            # esbuild bundle script (xterm CSS inlined as text)
+├── package.json         # build/deps list (ssh2 is a devDep; the server installs it at runtime)
+└── client/entry.mjs     # build output (self-contained bundle, loaded by the browser)
 ```
 
-## 安装 / 卸载 / 更新
+## Install / uninstall / update
 
 ```bash
-# ── 安装 ──
+# ── Install ──
 pi-web-ui install https://github.com/xing-shuyin/pi-web-ui/tree/main/dev/plugins/vscode-editor
-pi-web-ui install dev/plugins/vscode-editor  # 或本地目录（开发态）
-# 可选：--data-dir <dir> 自定义数据目录（默认 ~/.pi-web）
+pi-web-ui install dev/plugins/vscode-editor  # or a local directory (dev)
+# optional: --data-dir <dir> custom data directory (default ~/.pi-web)
 
-# ── 查看 ──
-pi-web-ui plugins                            # 列出已装插件与 id
+# ── List ──
+pi-web-ui plugins                            # list installed plugins and ids
 
-# ── 更新 ──
+# ── Update ──
 pi-web-ui install https://github.com/xing-shuyin/pi-web-ui/tree/main/dev/plugins/vscode-editor --force
-                                             # --force 覆盖重装即更新
-                                             # ⚠ 先备份插件目录里的 ssh-hosts.json 与
-                                             #   工作区 .vscode/sftp.json（主机凭据/同步配置）
+                                             # --force overwrites = update
+                                             # ⚠ back up ssh-hosts.json in the plugin dir and
+                                             #   workspace .vscode/sftp.json (host creds / sync config)
 
-cp -r dev/plugins/vscode-editor ~/.pi-web/plugins/  # 本地开发态：改完 src 后先 npm run build 再拷贝
+cp -r dev/plugins/vscode-editor ~/.pi-web/plugins/  # local dev: npm run build after src changes, then copy
                                              # Windows: %USERPROFILE%\.pi-web\plugins\vscode-editor
-                                             # 只需 manifest.json + index.mjs + client/ 三部分，
-                                             # node_modules / src / build.mjs 不需要拷贝
+                                             # only manifest.json + index.mjs + client/ are needed;
+                                             # node_modules / src / build.mjs do not need to be copied
 
-# ── 卸载 ──
-pi-web-ui uninstall vscode-editor            # 移除插件目录（ssh-hosts.json 一并删除）
-# 手动方式：rm -rf ~/.pi-web/plugins/vscode-editor
+# ── Uninstall ──
+pi-web-ui uninstall vscode-editor            # removes the plugin dir (including ssh-hosts.json)
+# manual: rm -rf ~/.pi-web/plugins/vscode-editor
 ```
 
-刷新页面后顶栏出现 📝 标签即成功。依赖 ssh2 不随包分发，首次激活自动 npm
-补装到插件目录（失败可点侧栏「⚠ssh2」按钮手动触发）。
+Refresh the page; a 📝 tab in the top bar means it worked. ssh2 is not shipped with the
+package; first activate runs npm install into the plugin directory (if that fails, click
+the sidebar "⚠ssh2" button).

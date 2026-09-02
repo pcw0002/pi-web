@@ -170,7 +170,7 @@ try {
 		m.providers.some((p) => p.providerId === "my-provider"),
 	);
 
-	// 1) refresh #1 — fetched=[a,b], saved=[a] → b 新增；手填字段必须胜出
+	// 1) refresh #1 — fetched=[a,b], saved=[a] → b is added; hand-filled fields must win
 	c.send({ type: "refresh_provider_models", providerId: "my-provider", reqId: 11 });
 	const r1 = await c.waitFor("refresh_provider_result", 15000, (m) => m.reqId === 11);
 	check("refresh ok, added=1, total=2", r1.ok && r1.added === 1 && r1.total === 2, JSON.stringify(r1));

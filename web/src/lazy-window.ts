@@ -1,14 +1,17 @@
 /**
- * 消息列表惰性窗口化的纯函数部分（零 React 依赖，可单测）。
+ * Pure-function half of message-list lazy windowing (zero React, unit-testable).
  *
- * 策略：最近段全量渲染的 DOM 成本随消息体积增长（一条大 tool 输出 / 长代码块
- * 就是几千节点）。这里不引入绝对定位虚拟滚动，而是「惰性挂载 + 高度占位」：
- * 视口（含上下 rootMargin 缓冲带）之外的重型消息替换为固定高度的占位 div，
- * 滚动临近时再换回真实内容，并在同一帧内做 scrollTop 补偿防止跳动。
- * 占位 div 保留 data-msg-id，问题导航 / 跳转 / flash 的 DOM 查询不受影响。
+ * Strategy: the DOM cost of fully rendering the recent segment grows with
+ * message size (one large tool output / long code block is thousands of
+ * nodes). Instead of absolutely-positioned virtual scroll, this uses
+ * "lazy mount + height placeholders": heavy messages outside the viewport
+ * (plus a rootMargin band above and below) are replaced with a fixed-height
+ * placeholder div. Scrolling nearby swaps the real content back in, with
+ * same-frame scrollTop compensation so the view doesn't jump. Placeholders
+ * keep data-msg-id so question-nav / jump / flash DOM queries still work.
  */
 
-/** 单条消息相对视口的包围盒（容器坐标系即可，任意一致坐标系都行）。 */
+/** Bounding box of one message relative to the viewport (any consistent coordinate system, typically the container's). */
 export interface WinRect {
 	id: string;
 	top: number;
@@ -16,25 +19,27 @@ export interface WinRect {
 }
 
 export interface WindowPlan {
-	/** 应从隐藏恢复为真实渲染的消息 id。 */
+	/** Message ids that should return from placeholder to real render. */
 	show: string[];
-	/** 应替换为占位符的消息 id。 */
+	/** Message ids that should be replaced with a placeholder. */
 	hide: string[];
 	/**
-	 * 隐藏「完全位于视口上方」的新增隐藏项导致的内容总高度收缩量：
-	 * 提交后需 scrollTop -= shrinkAbove 才能保持可视内容不动。
+	 * Total content-height shrinkage from newly hidden items that sit
+	 * entirely above the viewport: after commit, scrollTop -= shrinkAbove
+	 * to keep the visible content still.
 	 */
 	shrinkAbove: number;
 }
 
 /**
- * 计算本轮窗口计划。只输出**变化**：已在隐藏集合里的不可见项不再重复输出
- * （避免 rAF 连续两帧之间重复累计 shrinkAbove），保持 always 集合里的项不动。
+ * Compute this frame's window plan. Only emits **deltas**: items already in
+ * the hidden set are not listed again (avoids double-counting shrinkAbove
+ * across consecutive rAF frames). Items in the always set are left alone.
  *
- * @param items    当前所有受管消息的矩形（通常来自 getBoundingClientRect）
- * @param viewport 含缓冲带的视口区间 {top, bottom}（与 items 同一坐标系）
- * @param always   永不占位（始终真实渲染）的消息 id
- * @param hidden   当前已处于占位状态的消息 id
+ * @param items    Rects of every managed message (usually from getBoundingClientRect)
+ * @param viewport Viewport interval including the buffer band {top, bottom} (same coords as items)
+ * @param always   Message ids that must never be placeholder'd (always real-rendered)
+ * @param hidden   Message ids currently in the placeholder state
  */
 export function planWindow(
 	items: readonly WinRect[],
@@ -52,14 +57,15 @@ export function planWindow(
 			if (hidden.has(it.id)) show.push(it.id);
 		} else if (!hidden.has(it.id)) {
 			hide.push(it.id);
-			// 完全在视口上方的项被收起后，下方内容整体上移——需要回滚 scrollTop。
+			// Collapsing an item entirely above the viewport shifts everything
+			// below it up — roll scrollTop back by that height.
 			if (it.bottom <= viewport.top) shrinkAbove += it.bottom - it.top;
 		}
 	}
 	return { show, hide, shrinkAbove };
 }
 
-/** 把窗口计划应用到隐藏集合（纯函数：不变则原引用返回，便于跳过重渲染）。 */
+/** Apply a window plan to the hidden set (pure: returns the previous reference when unchanged, so renders can be skipped). */
 export function applyPlan(
 	prev: ReadonlySet<string>,
 	plan: WindowPlan,
@@ -73,9 +79,11 @@ export function applyPlan(
 }
 
 /**
- * 底部常驻区选取：从末尾向前累计高度（实测优先，缺省估算），超过预算即停。
- * 纯按条数常驻会被单条巨型消息（大 tool 输出 / 长代码块）撑穿——那正是
- * 本模块要优化的对象；按高度预算保证常驻区始终有界。
+ * Pick the always-on bottom region: accumulate height from the tail
+ * (measured first, estimate as fallback) and stop once the budget is
+ * exceeded. A count-based always-on set would be blown out by one giant
+ * message (large tool output / long code block) — exactly what this module
+ * exists to optimize. A height budget keeps the always-on region bounded.
  */
 export function pickAlways(
 	msgs: readonly { id: string; role: string; customType?: string }[],
@@ -94,8 +102,10 @@ export function pickAlways(
 }
 
 /**
- * 从未被渲染过的消息没有实测高度，按角色给一个粗估占位高度。
- * 只求量级正确（首次向上滚动不跳太多）；一旦真实渲染过，测量值会覆盖估算值。
+ * Unrendered messages have no measured height; give a rough placeholder
+ * height by role. Only the order of magnitude matters (first scroll-up
+ * shouldn't jump much); once really rendered, the measured value replaces
+ * the estimate.
  */
 export function estimateMessageHeight(
 	role: string,
@@ -107,7 +117,7 @@ export function estimateMessageHeight(
 		case "assistant":
 			return 280;
 		case "toolResult":
-			return 8; // 内容折叠进 toolCall 卡片，本体近乎零高
+			return 8; // Content is folded into the toolCall card; the row itself is nearly zero height.
 		case "custom":
 			return customType === "file" ? 96 : 72;
 		default:

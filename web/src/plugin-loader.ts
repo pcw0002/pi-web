@@ -1,26 +1,29 @@
 /**
- * 插件视图加载器：把 <dataDir>/plugins/<id>/client/entry.mjs 动态加载进页面。
+ * Plugin view loader: dynamically import <dataDir>/plugins/<id>/client/entry.mjs
+ * into the page.
  *
- * 插件客户端模块的约定（ESM，默认导出）：
+ * Plugin client module contract (ESM, default export):
  *   export default {
- *     // 挂载到宿主给的 DOM 容器；返回清理函数（可选），切走/卸载时调用。
+ *     // Mount into the host-provided DOM container; return an optional cleanup
+ *     // function, called when the view is switched away or unloaded.
  *     mount(container: HTMLElement, ctx: PluginViewContext): void | (() => void)
  *   }
  *
- * 与主应用的通信只有两条窄通道（不共享 React 实例，插件可用任何技术栈）：
- *   ctx.send(payload)   → WS 上行 {type:"plugin_message", pluginId, payload}
- *   ctx.onData(cb)      ← WS 下行 plugin_data（按 pluginId 过滤后回调）
+ * Communication with the host is two narrow channels (no shared React instance;
+ * plugins may use any stack):
+ *   ctx.send(payload)   → WS uplink {type:"plugin_message", pluginId, payload}
+ *   ctx.onData(cb)      ← WS downlink plugin_data (filtered by pluginId)
  *
- * plugin_data 的分发走 window CustomEvent（同主题切换的事件模式），
- * use-chat 收到消息后 emitPluginData，这里订阅并按插件扇出。
+ * plugin_data is fanned out via a window CustomEvent (same pattern as theme
+ * change); use-chat calls emitPluginData, and this module subscribes per plugin.
  */
 import type { UiPluginInfo } from "./types";
 
 export interface PluginViewContext {
 	pluginId: string;
-	/** 上行一条消息给插件的服务端入口（index.mjs 的 onMessage 处理器）。 */
+	/** Send one message to the plugin's server entry (index.mjs onMessage). */
 	send: (payload: unknown) => void;
-	/** 订阅服务端广播；返回取消订阅函数。 */
+	/** Subscribe to server broadcasts; returns an unsubscribe function. */
 	onData: (cb: (payload: unknown) => void) => () => void;
 }
 
@@ -38,7 +41,7 @@ export interface LoadedPluginView {
 
 const PLUGIN_DATA_EVENT = "pi-web-ui:plugin-data";
 
-/** use-chat 调用：把服务端 plugin_data 消息转成分发事件。 */
+/** Called by use-chat: turn a server plugin_data message into a fan-out event. */
 export function emitPluginData(pluginId: string, payload: unknown): void {
 	window.dispatchEvent(
 		new CustomEvent(PLUGIN_DATA_EVENT, { detail: { pluginId, payload } }),
@@ -59,15 +62,16 @@ function subscribeAll(
 	return () => window.removeEventListener(PLUGIN_DATA_EVENT, handler);
 }
 
-// ---- 已加载视图注册表（模块级单例；React 只是通过订阅读它） -----------------
+// ---- Loaded-view registry (module singleton; React only reads via subscribe) -
 
 const loaded = new Map<string, LoadedPluginView>();
 const listeners = new Set<(views: LoadedPluginView[]) => void>();
-/** 加载失败的 id——同一 epoch 内不再重试（避免坏 bundle 无限刷错误）；
- *  目录清单变化/服务端重载（epoch 变）后自动清空，给修复后的插件重试机会。 */
+/** Ids that failed to load — not retried within the same epoch (avoids
+ *  infinite error spam from a bad bundle). Cleared when the catalog changes
+ *  or the server reloads (epoch bump) so a fixed plugin can retry. */
 const failed = new Set<string>();
-/** 上次加载用的服务端重载纪元；变化时丢弃全部已加载视图（bundle URL 带 ?e=
- *  强制浏览器重新拉取）。 */
+/** Server-reload epoch used for the last load. When it changes, drop every
+ *  loaded view (bundle URLs carry ?e= so the browser re-fetches). */
 let lastEpoch = -1;
 
 function snapshot(): LoadedPluginView[] {
@@ -79,7 +83,7 @@ function notify(): void {
 	for (const l of listeners) l(snap);
 }
 
-/** 订阅当前已加载的插件视图（立即回调一次当前快照）。 */
+/** Subscribe to currently loaded plugin views (fires once immediately with the current snapshot). */
 export function subscribeLoadedPluginViews(
 	cb: (views: LoadedPluginView[]) => void,
 ): () => void {
@@ -89,10 +93,10 @@ export function subscribeLoadedPluginViews(
 }
 
 /**
- * 把目录清单里应显示的插件同步到注册表：
- * - epoch 变化（服务端 plugins_reload）→ 丢弃全部旧 bundle，用 ?e= 重拉
- * - 清单中消失/被禁用的插件 → 移除已加载视图（React 随之卸载并调 cleanup）
- * - 新出现且未失败过的 → 动态 import
+ * Sync catalog plugins that should be shown into the registry:
+ * - epoch change (server plugins_reload) → drop all old bundles, re-fetch with ?e=
+ * - gone / disabled in the catalog → remove the loaded view (React unmounts and calls cleanup)
+ * - newly appeared and not previously failed → dynamic import
  */
 export async function syncPluginViews(
 	plugins: UiPluginInfo[],
@@ -103,8 +107,9 @@ export async function syncPluginViews(
 		loaded.clear();
 		failed.clear();
 	}
-	// 清掉清单里不再存在的（被删目录 / 设置面板禁用 / 报错）——包括 failed 记录，
-	// 让重新安装的同名插件可以再次尝试。
+	// Drop entries no longer in the catalog (deleted dir / settings disable /
+	// error) — including failed records, so a reinstalled plugin of the same
+	// id can try again.
 	const active = new Set(plugins.map((p) => p.id));
 	for (const id of [...loaded.keys()]) {
 		if (!active.has(id)) loaded.delete(id);
@@ -117,9 +122,9 @@ export async function syncPluginViews(
 			.filter((p) => p.hasClient && !p.error && !loaded.has(p.id) && !failed.has(p.id))
 			.map(async (p) => {
 				try {
-					// @vite-ignore：URL 运行时才知道，Vite 不要试图打包它。
-					// ?e=<epoch> 作为缓存击穿参数：服务端 reload 后 URL 变化，
-					// 浏览器才会真正重新执行改过的 bundle。
+					// @vite-ignore: the URL is only known at runtime; Vite must
+					// not try to bundle it. ?e=<epoch> busts the cache so a
+					// server reload actually re-executes the changed bundle.
 					const mod = (await import(
 						/* @vite-ignore */ `/plugins/${encodeURIComponent(p.id)}/client/entry.mjs?e=${epoch}`
 					)) as { default?: PluginViewModule };
@@ -128,18 +133,18 @@ export async function syncPluginViews(
 						loaded.set(p.id, { info: p, module: m });
 					} else {
 						failed.add(p.id);
-						console.error(`[plugin:${p.id}] entry.mjs 缺少 default.mount`);
+						console.error(`[plugin:${p.id}] entry.mjs is missing default.mount`);
 					}
 				} catch (err) {
 					failed.add(p.id);
-					console.error(`[plugin:${p.id}] 客户端加载失败:`, err);
+					console.error(`[plugin:${p.id}] failed to load client bundle:`, err);
 				}
 			}),
 	);
 	notify();
 }
 
-/** 组装传给插件 mount() 的上下文（send 由 App 注入真正的 ws 发送函数）。 */
+/** Build the context passed to plugin mount() (App injects the real ws send). */
 export function makePluginContext(
 	pluginId: string,
 	send: (msg: { type: "plugin_message"; pluginId: string; payload: unknown }) => void,

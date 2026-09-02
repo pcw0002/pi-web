@@ -1,20 +1,21 @@
 /**
- * pi-web-ui 插件管理器 —— 可选界面组件的加载与桥接。
+ * pi-web-ui plugin manager — load and bridge optional UI components.
  *
- * 一个插件 = <dataDir>/plugins/<id>/ 目录：
- *   manifest.json   元数据 { id?, name, version?, description? }（id 缺省取目录名）
- *   index.mjs       服务端入口（可选）：export default { activate(host) → deactivate? }
- *   client/         前端资源（可选），经 /plugins/<id>/client/* 以静态文件暴露；
- *     entry.mjs      视图入口：export default { mount(el, ctx) → cleanup? }
+ * A plugin is a directory <dataDir>/plugins/<id>/:
+ *   manifest.json   metadata { id?, name, version?, description? } (id defaults to the directory name)
+ *   index.mjs       server entry (optional): export default { activate(host) → deactivate? }
+ *   client/         frontend assets (optional), served as static files at /plugins/<id>/client/*;
+ *     entry.mjs      view entry: export default { mount(el, ctx) → cleanup? }
  *
- * 设计要点：
- * - 不装即不存在：目录不在就没有任何协议/UI 痕迹；每次客户端 attach 时重扫目录，
- *   新丢进来的插件无需重启服务即可出现在顶栏（import 只做一次并缓存）。
- * - id 必须匹配 ID_RE，防路径穿越；client 静态服务同样逐段校验。
- * - host 窄接口：broadcast(pluginId, payload) 广播 plugin_data、onMessage 注册
- *   客户端上行处理、dataDir/cwd/log 环境。发送通道由 index.ts 注入（每个 socket
- *   的 send 函数），插件本身不接触 ws。
- * - activate 抛错只标记 error 字段并记日志，绝不影响主进程。
+ * Design notes:
+ * - Absent means absent: with no directory there is no protocol/UI trace. The directory
+ *   is re-scanned on every client attach, so a newly dropped-in plugin appears in the
+ *   top bar without a server restart (import happens once and is cached).
+ * - id must match ID_RE to block path traversal; the client static server validates each segment too.
+ * - Narrow host: broadcast(pluginId, payload) fans out plugin_data, onMessage registers
+ *   client uplink handlers, plus dataDir/cwd/log. The send channel is injected by
+ *   index.ts (each socket's send); the plugin never touches ws itself.
+ * - An activate throw only sets the error field and logs; it must never affect the main process.
  */
 import { readdir, readFile, stat } from "node:fs/promises";
 import { existsSync, readFileSync, renameSync, writeFileSync } from "node:fs";
@@ -25,39 +26,40 @@ import { PluginStorage, PluginSecrets, ensurePluginDeps, WorkspaceFS } from "./p
 import type { Request, Response } from "express";
 import { createHash } from "node:crypto";
 
-/** 合法插件 id：字母/数字/下划线/连字符，防路径穿越（同 themes.ts 的做法）。 */
+/** Legal plugin id: letters/digits/underscore/hyphen; blocks path traversal (same approach as themes.ts). */
 const ID_RE = /^[A-Za-z0-9_-]+$/;
 
-/** 插件收到的工具执行事件（agent-service 的 SDK tool_execution_start/end 转发）。 */
+/** Tool-execution event delivered to plugins (forwarded from agent-service's SDK tool_execution_start/end). */
 export interface PluginToolEvent {
 	phase: "start" | "end";
 	toolName: string;
-	/** 事件所属对话（会话未就绪时可能为空）。 */
+	/** Conversation the event belongs to (may be empty if the session is not ready). */
 	conversationId?: string;
-	/** end 独有：真实执行耗时毫秒 / 是否报错。 */
+	/** end-only: real execution duration in ms / whether it errored. */
 	durationMs?: number;
 	isError?: boolean;
 }
 
 /**
- * 插件注册的 AI 工具（结构化定义，与 SDK ToolDefinition 解耦——由
- * agent-service 负责转换）。execute 返回 { content, details? }（content 为
- * [{type:"text",text}] 或图片块），或直接返回字符串/对象（自动包成文本）。
+ * AI tool registered by a plugin (structured definition, decoupled from the SDK
+ * ToolDefinition — agent-service does the conversion). execute returns
+ * { content, details? } (content is [{type:"text",text}] or image blocks), or a
+ * string/object directly (wrapped as text automatically).
  */
 export interface PluginAgentTool {
-	/** 工具名（建议 <插件名>_<动作> 前缀，如 mail_list；全局唯一，重复注册后者被拒）。 */
+	/** Tool name (prefer a <plugin>_<action> prefix, e.g. mail_list; globally unique — a duplicate registration is rejected). */
 	name: string;
-	/** UI 显示标签。 */
+	/** UI display label. */
 	label?: string;
-	/** 给 LLM 的工具描述。 */
+	/** Tool description for the LLM. */
 	description: string;
-	/** 可选：出现在系统提示词 Available tools 区的一行摘要。 */
+	/** Optional: one-line summary in the system prompt's Available tools section. */
 	promptSnippet?: string;
-	/** 可选：追加到系统提示词 Guidelines 的要点。 */
+	/** Optional: bullets appended to the system prompt Guidelines. */
 	promptGuidelines?: string[];
-	/** 参数 JSON Schema（TypeBox/JSON Schema 兼容）。缺省为空对象。 */
+	/** Parameter JSON Schema (TypeBox / JSON Schema compatible). Defaults to an empty object. */
 	parameters?: Record<string, unknown>;
-	/** 执行体；onUpdate 可流式上报部分结果（同形结构）。 */
+	/** Implementation; onUpdate may stream partial results (same shape). */
 	execute(
 		toolCallId: string,
 		params: Record<string, unknown>,
@@ -66,51 +68,54 @@ export interface PluginAgentTool {
 	): Promise<unknown>;
 }
 
-/** 插件服务端入口拿到的宿主接口。 */
+/** Host interface handed to the plugin's server entry. */
 export interface PluginHost {
-	/** 向所有已连接的浏览器广播一条本插件的消息（plugin_data）。 */
+	/** Broadcast a message from this plugin to every connected browser (plugin_data). */
 	broadcast(payload: unknown): void;
-	/** 发一条系统通知条（notice）给所有已连接的浏览器。 */
+	/** Send a system notice to every connected browser. */
 	notify(level: "info" | "warning" | "error", text: string): void;
-	/** 注册客户端上行消息（plugin_message）处理器；回调第二参为发送方 clientId
-	 *  （可用于 sendTo 定向回复）。返回注销函数。 */
+	/** Register a client-uplink (plugin_message) handler; the callback's second arg is
+	 *  the sender clientId (usable with sendTo for a directed reply). Returns an unsubscribe. */
 	onMessage(handler: (payload: unknown, from?: string) => void): () => void;
-	/** 给指定客户端定向发一条本插件消息（不广播）；clientId 来自 onMessage。 */
+	/** Send a directed plugin message to one client (not broadcast); clientId comes from onMessage. */
 	sendTo(clientId: string, payload: unknown): void;
-	/** 注册「新客户端接入」钩子：每次浏览器 attach（含插件刚激活时已在场的连接、
-	 *  以及 plugins_reload 后的重新接入）都会以 clientId 回调。插件应借此主动
-		 *  推送自身完整状态（kind:"state" 等）——服务端是唯一事实源，不要依赖客户端
-		 *  挂载后自己来拉（裸 ctx.send({action:"state"}) 无 reqId，响应会被客户端的
-		 *  pending 匹配静默丢弃，这是已踩过两次的坑）。返回注销函数。 */
+	/** Register a "new client attached" hook: every browser attach (including connections
+	 *  already present when the plugin just activated, and re-attaches after plugins_reload)
+	 *  is called back with clientId. Plugins should use this to push their full state
+		 *  (kind:"state", etc.) — the server is the source of truth. Do not rely on the
+		 *  client pulling after mount (a bare ctx.send({action:"state"}) has no reqId, so
+		 *  the response is silently dropped by the client's pending matcher — a pit fallen
+		 *  into twice). Returns an unsubscribe. */
 	onAttach(handler: (clientId: string) => void): () => void;
-	/** 订阅智能体的工具执行事件（bash/读写文件等，start+end 成对）；返回注销函数。 */
+	/** Subscribe to agent tool-execution events (bash / file R/W, etc., start+end pairs); returns an unsubscribe. */
 	onToolEvent(handler: (ev: PluginToolEvent) => void): () => void;
-	/** 注册一个供 AI 调用的工具（新对话创建时带上，已有会话动态注入）；
-	 *  返回注销函数——插件可按自己的配置开关随时注册/注销（如邮箱插件的
-	 *  「让 AI 管理邮件」开关）。 */
+	/** Register a tool the AI can call (attached when a new conversation is created,
+	 *  injected dynamically into existing sessions). Returns an unsubscribe — the plugin
+	 *  may register/unregister at any time from its own config toggle (e.g. the mail
+	 *  plugin's "let AI manage mail" switch). */
 	registerAgentTool(tool: PluginAgentTool): () => void;
-	/** 插件自己的持久化目录（<dataDir>/plugins/<id>）——凭据等放这里。 */
+	/** This plugin's own persistence directory (<dataDir>/plugins/<id>) — credentials live here. */
 	dir: string;
-	/** 全局数据目录（~/.pi-web）。 */
+	/** Global data directory (~/.pi-web). */
 	dataDir: string;
-	/** 当前智能体工作区——**活的**：跟随任意客户端 set_cwd 成功后的新根，
-	 *  插件可随时读；想主动感知变化用 onCwdChange。 */
+	/** Current agent workspace — **live**: follows the new root after any client's
+	 *  successful set_cwd. Plugins may read it at any time; use onCwdChange to observe changes. */
 	get cwd(): string;
-	/** 注册工作区切换回调（主应用 set_cwd 成功后以新绝对路径触发）。
-	 *  返回注销函数。旧版宿主无此方法（可选链兼容）。 */
+	/** Register a workspace-change callback (fired with the new absolute path after the
+	 *  main app's set_cwd succeeds). Returns an unsubscribe. Older hosts lack this method (optional-chain compatible). */
 	onCwdChange(handler: (cwd: string) => void): () => void;
-	/** 注册一个斜杠命令（/name），出现在输入框命令选择器里，服务端拦截执行。
-	 *  返回注销函数；重名拒绝（内置命令优先，先注册的插件优先）。 */
+	/** Register a slash command (/name) that appears in the input-box picker; the server intercepts and runs it.
+	 *  Returns an unsubscribe. Duplicate names are rejected (built-ins win, then first-registered plugin). */
 	registerCommand(cmd: PluginCommandDef): () => void;
-	/** 插件私有 KV 存储（<pluginDir>/storage.json，原子写、卸载即删除）。 */
+	/** Plugin-private KV store (<pluginDir>/storage.json, atomic write, deleted on uninstall). */
 	storage: {
 		get<T>(key: string, fallback?: T): T | undefined;
 		set(key: string, value: unknown): void;
 		delete(key: string): void;
 		all(): Record<string, unknown>;
 	};
-	/** 加密机密存储（AES-256-GCM；存密码/API key/token 等）。
-	 *  明文绝不落盘；拷到别的机器因无宿主密钥解不开。 */
+	/** Encrypted secret store (AES-256-GCM; passwords / API keys / tokens).
+	 *  Plaintext never hits disk; copied to another machine it cannot decrypt without the host key. */
 	secrets: {
 		set(name: string, value: string): void;
 		get(name: string): string | undefined;
@@ -118,20 +123,22 @@ export interface PluginHost {
 		delete(name: string): void;
 		list(): string[];
 	};
-	/** 确保依赖就绪：缺了自动 npm install 到插件目录（单飞合并）。
-	 *  resolve 后的 import 才能成功——插件动态加载重型依赖前应 await 它。 */
+	/** Ensure dependencies are ready: missing ones are npm-installed into the plugin directory (single-flight).
+	 *  import only succeeds after resolve — plugins should await this before dynamically loading heavy deps. */
 	ensureDeps(specs: string[], opts?: { onProgress?: (msg: string) => void }): Promise<boolean>;
-	/** 挂载 HTTP 路由：实际暴露为 /plugins-api/<id><path>（GET/POST/PUT/DELETE）。
-	 *  主站的 PI_WEB_TOKEN 鉴权自动覆盖这些路由；body 已过 express.json 解析。
-	 *  handler 抛错由宿主转成 500，不炸进程。返回注销函数。需要能力 "http"。 */
+	/** Mount an HTTP route, actually exposed as /plugins-api/<id><path> (GET/POST/PUT/DELETE).
+	 *  The main site's PI_WEB_TOKEN auth covers these automatically; the body has already been
+	 *  through express.json. A throwing handler becomes a 500 and does not crash the process.
+	 *  Returns an unsubscribe. Requires the "http" capability. */
 	route(
 		method: "GET" | "POST" | "PUT" | "DELETE",
 		path: string,
 		handler: (req: Request, res: Response) => void,
 	): () => void;
-	/** 受限工作区文件访问（读/写/列/删）：路径永远锚定「当前工作区根」
-	 *  （活值，跟随 set_cwd），越界拒绝——与插件自己 import node:fs 不同，
-	 *  这一层是宿主强制执行的。需要能力 "fs"。 */
+	/** Sandboxed workspace file access (read/write/list/delete): paths are always
+	 *  anchored at the current workspace root (a live value that follows set_cwd).
+	 *  Out-of-tree paths are rejected — unlike a plugin importing node:fs itself,
+	 *  this layer is enforced by the host. Requires the "fs" capability. */
 	fs: {
 		list(relDir?: string): Promise<{ name: string; type: "file" | "dir" }[]>;
 		read(relPath: string): Promise<Buffer>;
@@ -139,27 +146,29 @@ export interface PluginHost {
 		write(relPath: string, data: string | Uint8Array): Promise<void>;
 		remove(relPath: string): Promise<void>;
 	};
-	/** 注册一个常驻后台任务（轮询器/连接池/后台 worker…）：出现在顶栏「后台任务」
-	 *  面板，用户可一键停止。返回 { update, unregister }。id 在插件内唯一。 */
+	/** Register a resident background task (poller / connection pool / background worker…):
+	 *  it appears in the top-bar background-tasks panel and the user can stop it in one click.
+	 *  Returns { update, unregister }. id is unique within the plugin. */
 	registerBackgroundTask(task: {
 		id: string;
-		/** 面板显示名（如「📬 邮件轮询」）。 */
+		/** Panel display name (e.g. "📬 Mail poller"). */
 		label: string;
-		/** 停止回调（面板「停止」按钮触发；用户也可能直接 kill 进程树）。 */
+		/** Stop callback (fired by the panel's Stop button; the user may also kill the process tree directly). */
 		stop?: () => void;
-		/** 可选初始状态文案，之后可经 update() 刷新。 */
+		/** Optional initial status text; later refreshable via update(). */
 		status?: string;
 	}): {
 		update(next: Partial<{ label: string; status: string; stop: () => void }>): void;
 		unregister(): void;
 	};
-	/** 读取宿主管理的设置值（manifest "settings" 声明的字段，storage.json
-	 *  存值 + 默认值合并）。插件应以此为准做运行时行为。 */
+	/** Read host-managed settings values (fields declared in the manifest "settings",
+	 *  stored values in storage.json merged with defaults). Plugins should treat this as the source of runtime behavior. */
 	getSettings(): Record<string, unknown>;
-	/** 订阅「用户在 ⚙ 面板改了这个插件的声明式设置」事件（保存后触发，
-	 *  参数为新值对象）；返回注销函数。改完应自行重读 getSettings()。 */
+	/** Subscribe to "the user changed this plugin's declarative settings in the ⚙ panel"
+	 *  (fires after save, argument is the new values object). Returns an unsubscribe.
+	 *  After a change, re-read getSettings() yourself. */
 	onSettingsChanged(handler: (values: Record<string, unknown>) => void): () => void;
-	/** 带前缀的日志。 */
+	/** Prefixed logger. */
 	log(...args: unknown[]): void;
 }
 
@@ -168,46 +177,46 @@ interface LoadedPlugin {
 	/** deactivate() if the entry provided one. */
 	deactivate?: () => void;
 	toolHandlers: Set<(ev: PluginToolEvent) => void>;
-	/** onAttach 钩子（新客户端接入时逐个回调）。 */
+	/** onAttach hooks (called one by one when a new client attaches). */
 	attachHandlers: Set<(clientId: string) => void>;
-	/** onCwdChange 钩子（工作区切换时逐个回调）。 */
+	/** onCwdChange hooks (called one by one on a workspace switch). */
 	cwdHandlers: Set<(cwd: string) => void>;
-	/** 该插件注册的全部 AI 工具注销函数（反激活时逐个调用）。 */
+	/** Unsubscribers for every AI tool this plugin registered (called one by one on deactivate). */
 	agentToolUnsubscribers?: Array<() => void>;
-	/** 该插件注册的全部斜杠命令注销函数。 */
+	/** Unsubscribers for every slash command this plugin registered. */
 	commandUnsubscribers?: Array<() => void>;
-	/** 该插件挂载的 HTTP 路由表："METHOD /path" → handler。 */
+	/** HTTP route table this plugin mounted: "METHOD /path" → handler. */
 	httpRoutes: Map<string, (req: Request, res: Response) => void>;
-	/** manifest.permissions 原始声明（空/缺省 = 未声明，旧全权模式）。错误路径占位可缺省。 */
+	/** Raw manifest.permissions declaration (empty/absent = undeclared, legacy full-access). Error-path placeholders may omit it. */
 	permsDeclared?: string[];
-	/** 声明中的能力族（去冒号前缀）：fs/net/tools/http/terminal… */
+	/** Capability families from the declaration (colon prefix stripped): fs/net/tools/http/terminal… */
 	permFamilies?: Set<string>;
-	/** 旧格式全权模式的「未声明」警告是否已发过（每次激活一次）。 */
+	/** Whether the legacy full-access "undeclared" warning has already been issued (once per activation). */
 	legacyWarned?: boolean;
-	/** onSettingsChanged 钩子（⚙ 面板保存声明式设置后触发）。 */
+	/** onSettingsChanged hooks (fired after the ⚙ panel saves declarative settings). */
 	settingsHandlers: Set<(values: Record<string, unknown>) => void>;
 }
 
-/** 宿主提供的插件设施版本——manifest 声明的 apiVersion 高于此值则拒绝激活，
- *  插件能拿到明确的「请升级 pi-web-ui」而不是在新接口上莫名 undefined。 */
+/** Plugin-facility version the host provides — a manifest apiVersion above this refuses
+ *  activation, so the plugin gets a clear "please upgrade pi-web-ui" instead of mysterious
+ *  undefined on a new interface. */
 export const PLUGIN_API_VERSION = 1;
 
-/** 插件通过 host.registerCommand 注册的斜杠命令。run 的返回值若为非空字符串，
- *  会作为系统通知条回显给发起人；需要富展示的视图插件应改用 broadcast/sendTo。
- *  命令是纯配置动作（不消耗 token），与内置命令同级拦截执行。 */
+/** Slash command a plugin registers via host.registerCommand. A non-empty string
+ *  return from run is echoed to the initiator as a system notice; view plugins that
+ *  need rich display should use broadcast/sendTo instead. Commands are pure config
+ *  actions (no tokens) and are intercepted at the same level as built-ins. */
 export interface PluginCommandDef {
 	name: string;
 	description?: string;
-	descriptionEn?: string;
 	argumentHint?: string;
-	argumentHintEn?: string;
 	run(args: string, ctx: { clientId?: string }): unknown | Promise<unknown>;
 }
 
-/** 每个插件的 AI 工具注册表（name → 定义）。 */
+/** Per-plugin AI-tool registry (name → definition). */
 type AgentToolTable = Map<string, PluginAgentTool>;
 
-/** 插件注册的常驻后台任务（经 host.registerBackgroundTask）。 */
+/** Resident background task registered by a plugin (via host.registerBackgroundTask). */
 export interface PluginBgTask {
 	id: string;
 	label: string;
@@ -216,26 +225,26 @@ export interface PluginBgTask {
 	since: number;
 }
 
-/** 消息处理器超时：仅作为不再等待的日志阈值（响应由 handler 自己发出）。 */
+/** Message-handler timeout: log threshold only for giving up the wait (the handler itself emits the response). */
 const MESSAGE_TIMEOUT_MS = 30_000;
 
-/** host.fs 被能力门控拒绝时的共享 rejected promise（类型对齐用）。 */
-const NO_FS_PROMISE = Promise.reject(new Error('插件未声明能力 "fs"（manifest.permissions）——请求被拒'));
-NO_FS_PROMISE.catch(() => {}); // 避免未处理 rejection 噪音；调用方 await 时拿到错误
+/** Shared rejected promise when host.fs is denied by the capability gate (for type alignment). */
+const NO_FS_PROMISE = Promise.reject(new Error('Plugin did not declare "fs" (manifest.permissions) — request denied'));
+NO_FS_PROMISE.catch(() => {}); // swallow unhandled-rejection noise; callers still get the error on await
 
-/** 每个 WS 连接注册一个 sender；cid() 返回该 socket 的 clientId（attach 前 null）。 */
+/** Each WS connection registers a sender; cid() returns that socket's clientId (null before attach). */
 interface Sender {
 	cid: () => string | null;
 	send: (msg: ServerMessage) => void;
 }
 
 // ---------------------------------------------------------------------------
-// 声明式设置 schema（manifest "settings"）
+// Declarative settings schema (manifest "settings")
 // ---------------------------------------------------------------------------
 
 const SETTING_TYPES = new Set(["text", "password", "number", "boolean", "select"]);
 
-/** 解析 manifest.settings → 合法 schema（坏字段跳过，最多 32 个）。 */
+/** Parse manifest.settings → a legal schema (bad fields skipped, cap 32). */
 function parseSettingsSchema(raw: unknown): UiPluginSettingField[] {
 	if (!Array.isArray(raw)) return [];
 	const out: UiPluginSettingField[] = [];
@@ -263,7 +272,7 @@ function parseSettingsSchema(raw: unknown): UiPluginSettingField[] {
 	return out;
 }
 
-/** 从 <pluginDir>/storage.json 读 settings 存值，按 schema 并默认值。 */
+/** Read stored settings from <pluginDir>/storage.json and merge with schema defaults. */
 function storedSettingsValues(dir: string, schema: UiPluginSettingField[]): Record<string, unknown> {
 	const out: Record<string, unknown> = {};
 	let stored: Record<string, unknown> = {};
@@ -273,13 +282,13 @@ function storedSettingsValues(dir: string, schema: UiPluginSettingField[]): Reco
 			stored = parsed.settings as Record<string, unknown>;
 		}
 	} catch {
-		/* 无存储文件 = 全默认 */
+		/* no storage file = all defaults */
 	}
 	for (const f of schema) out[f.key] = stored[f.key] ?? f.default;
 	return out;
 }
 
-/** 校验并写回 settings（storage.json 的 settings 键，原子写）；返回错误信息或 null。 */
+/** Validate and write settings back (the settings key in storage.json, atomic write); returns an error string or null. */
 function saveSettingsValues(
 	dir: string,
 	schema: UiPluginSettingField[],
@@ -291,26 +300,26 @@ function saveSettingsValues(
 		if (f.type === "number") {
 			const n = v === undefined ? Number(f.default ?? 0) : Number(v);
 			if (!Number.isFinite(n) || (f.min !== undefined && n < f.min) || (f.max !== undefined && n > f.max)) {
-				return { error: `${f.label} 超出范围`, clean };
+				return { error: `${f.label} is out of range`, clean };
 			}
 			clean[f.key] = n;
 		} else if (f.type === "boolean") {
 			clean[f.key] = v === undefined ? Boolean(f.default) : Boolean(v);
 		} else if (f.type === "select") {
-			if (v !== undefined && !f.options?.includes(String(v))) return { error: `${f.label} 值非法`, clean };
+			if (v !== undefined && !f.options?.includes(String(v))) return { error: `${f.label} has an invalid value`, clean };
 			clean[f.key] = v === undefined ? f.default : String(v);
 		} else {
 			clean[f.key] = v === undefined ? (f.default ?? "") : String(v);
 		}
 	}
 	try {
-		// 保留 storage.json 里其它键（插件自己的数据），只动 settings。
+		// Keep other keys in storage.json (the plugin's own data); only touch settings.
 		const file = join(dir, "storage.json");
 		let existing: Record<string, unknown> = {};
 		try {
 			existing = JSON.parse(readFileSync(file, "utf8")) as Record<string, unknown>;
 		} catch {
-			/* 首次 */
+			/* first time */
 		}
 		const tmp = `${file}.tmp-${process.pid}`;
 		writeFileSync(tmp, JSON.stringify({ ...existing, settings: clean }));
@@ -323,25 +332,25 @@ function saveSettingsValues(
 
 export class PluginManager {
 	private loaded = new Map<string, LoadedPlugin>();
-	/** 已 import 过但无入口/失败的目录——避免重复 import 与重复报错。 */
+	/** Directories already imported that had no entry / failed — avoid re-importing and re-logging. */
 	private attempted = new Set<string>();
 	private senders = new Set<Sender>();
 	private messageHandlers = new Map<string, Set<(payload: unknown, from?: string) => void>>();
-	/** 插件注册的 AI 工具：pluginId → (name → 定义)。宿主经 agentTools() 读取。 */
+	/** Plugin-registered AI tools: pluginId → (name → definition). The host reads via agentTools(). */
 	private agentTools = new Map<string, AgentToolTable>();
-	/** AI 工具集合变化回调（index.ts 接到 AgentService，把新工具推入活跃会话）。 */
+	/** Callback when the AI-tool set changes (index.ts wires AgentService to push new tools into active sessions). */
 	onAgentToolsChanged: (() => void) | undefined = undefined;
-	/** 插件斜杠命令注册表：pluginId → (name → 定义)。宿主经 listCommands() 读取。 */
+	/** Plugin slash-command registry: pluginId → (name → definition). The host reads via listCommands(). */
 	private pluginCommands = new Map<string, Map<string, PluginCommandDef>>();
-	/** 命令集合变化回调（index.ts 接到 AgentService，刷新各客户端命令目录）。 */
+	/** Callback when the command set changes (index.ts wires AgentService to refresh each client's catalog). */
 	onCommandsChanged: (() => void) | undefined = undefined;
-	/** 插件常驻任务：pluginId → Map<taskId, PluginBgTask>。宿主经 bgTasks() 读取。 */
+	/** Plugin resident tasks: pluginId → Map<taskId, PluginBgTask>. The host reads via bgTasks(). */
 	private pluginBgTasks = new Map<string, Map<string, PluginBgTask>>();
-	/** 任务集合变化回调（index.ts 接到 AgentService，重推 bg_servers）。 */
+	/** Callback when the task set changes (index.ts wires AgentService to re-push bg_servers). */
 	onBgTasksChanged: (() => void) | undefined = undefined;
-	/** 服务端重载纪元：每次 reload() +1，前端用作 import 缓存击穿参数。 */
+	/** Server reload epoch: +1 on every reload(); the frontend uses it as an import cache-bust query. */
 	private epochCounter = 0;
-	/** 当前全局工作区（host.cwd 的背后存储）——随 notifyCwd 更新。 */
+	/** Current global workspace (backing store for host.cwd) — updated by notifyCwd. */
 	private cwdValue: string;
 
 	constructor(
@@ -351,11 +360,16 @@ export class PluginManager {
 		this.cwdValue = resolve(cwd);
 	}
 
-	/** index.ts 在客户端 set_cwd 成功后调用：更新全局工作区并扇出给
-	 *  所有已激活插件的 onCwdChange 钩子（异常隔离，不炸主进程）。 */
+	/** Live workspace root (follows set_cwd). Built-in Local Review tools use this. */
+	getCwd(): string {
+		return this.cwdValue;
+	}
+
+	/** Called by index.ts after a client's set_cwd succeeds: update the global workspace
+	 *  and fan out to every activated plugin's onCwdChange hook (exceptions isolated, never crash the process). */
 	notifyCwd(next: string): void {
 		const abs = resolve(next);
-		if (abs === this.cwdValue) return; // 幂等：重复通知/同路径 no-op
+		if (abs === this.cwdValue) return; // idempotent: duplicate notify / same path is a no-op
 		this.cwdValue = abs;
 		for (const [id, p] of this.loaded) {
 			for (const h of p.cwdHandlers) {
@@ -372,7 +386,7 @@ export class PluginManager {
 		return join(this.dataDir, "plugins");
 	}
 
-	/** 全部插件注册的斜杠命令（按插件 id 稳定排序）。 */
+	/** Slash commands registered by every plugin (stable-sorted by plugin id). */
 	listCommands(): PluginCommandDef[] {
 		const out: PluginCommandDef[] = [];
 		for (const id of [...this.pluginCommands.keys()].sort()) {
@@ -381,7 +395,7 @@ export class PluginManager {
 		return out;
 	}
 
-	/** 按名查找命令（供 prompt() 拦截执行；找不到返回 null）。 */
+	/** Look up a command by name (for prompt() intercept; returns null if not found). */
 	findCommand(name: string): { def: PluginCommandDef; pluginId: string } | null {
 		for (const [pluginId, table] of this.pluginCommands) {
 			if (table.has(name)) return { def: table.get(name)!, pluginId };
@@ -389,7 +403,7 @@ export class PluginManager {
 		return null;
 	}
 
-	/** 全部插件注册的常驻后台任务（扁平化为 BgServer 形状）。 */
+	/** Resident background tasks registered by every plugin (flattened into BgServer shape). */
 	bgTasks(): BgServer[] {
 		const out: BgServer[] = [];
 		for (const [pluginId, table] of this.pluginBgTasks) {
@@ -406,7 +420,7 @@ export class PluginManager {
 		return out;
 	}
 
-	/** 停止一个插件任务（kill_background_server with taskId）；返回是否命中。 */
+	/** Stop a plugin task (kill_background_server with taskId); returns whether it hit. */
 	stopPluginBgTask(taskId: string): boolean {
 		for (const [pluginId, table] of this.pluginBgTasks) {
 			const t = table.get(taskId);
@@ -426,18 +440,19 @@ export class PluginManager {
 		return false;
 	}
 
-	/** 保存某插件的声明式设置（⚙ 面板 → plugin_settings 消息）：按 schema 校验、
-	 *  原子写 storage.json 的 settings 键、通知插件 onSettingsChanged、重推清单
-	 *  让前端回显。返回错误信息或 null（成功）。 */
+	/** Save a plugin's declarative settings (⚙ panel → plugin_settings message): validate
+	 *  against the schema, atomically write the settings key in storage.json, notify the
+	 *  plugin via onSettingsChanged, and re-push the catalog so the frontend echoes.
+	 *  Returns an error string or null (success). */
 	savePluginSettings(pluginId: string, values: Record<string, unknown>): { error?: string } {
-		if (!ID_RE.test(pluginId)) return { error: "非法的插件 id" };
+		if (!ID_RE.test(pluginId)) return { error: "Invalid plugin id" };
 		const dir = join(this.pluginsDir, pluginId);
 		const info = this.loaded.get(pluginId)?.info;
 		const schema = info?.settingsSchema ?? [];
-		if (!schema.length) return { error: "该插件没有声明式设置（manifest 未声明 settings）" };
+		if (!schema.length) return { error: "This plugin has no declarative settings (manifest has no settings)" };
 		const { error, clean } = saveSettingsValues(dir, schema, values);
 		if (error) return { error };
-		// 通知插件（异常隔离）
+		// Notify the plugin (exceptions isolated)
 		for (const h of this.loaded.get(pluginId)?.settingsHandlers ?? []) {
 			try {
 				h(clean);
@@ -445,12 +460,12 @@ export class PluginManager {
 				console.error(`[plugin:${pluginId}] onSettingsChanged handler failed:`, err);
 			}
 		}
-		// 重推 plugins 清单（含新 settingsValues），前端回显。
+		// Re-push the plugins catalog (including new settingsValues) so the frontend echoes.
 		void this.pushToAll().catch(() => {});
 		return {};
 	}
 
-	/** 当前重载纪元（随 plugins 消息下发）。 */
+	/** Current reload epoch (sent with the plugins message). */
 	get epoch(): number {
 		return this.epochCounter;
 	}
@@ -461,9 +476,9 @@ export class PluginManager {
 		return () => this.senders.delete(s);
 	}
 
-	/** 客户端上行：路由给对应插件的处理器；未知/未激活的插件静默丢弃。
-	 *  插件代码不可信——同步抛错与返回的 Promise rejection 都必须隔离在
-	 *  这里，绝不能炸主进程。 */
+	/** Client uplink: route to the matching plugin's handler; unknown/inactive plugins are dropped silently.
+	 *  Plugin code is untrusted — both a sync throw and a returned Promise rejection must be
+	 *  isolated here and must never crash the process. */
 	handleMessage(pluginId: string, payload: unknown, from?: string): void {
 		if (!ID_RE.test(pluginId)) return;
 		const handlers = this.messageHandlers.get(pluginId);
@@ -475,11 +490,12 @@ export class PluginManager {
 					ret.catch((err) => {
 						console.error(`[plugin:${pluginId}] async message handler failed:`, err);
 					});
-					// 超时护栏：响应由 handler 自己 sendTo/broadcast 发出，超时只是记
-					// 日志不再等待——绝不能让单条消息把客户端 pending 管线无限拖死。
+					// Timeout guard: the handler itself emits the response via sendTo/broadcast;
+					// timeout only logs and stops waiting — a single message must never stall
+					// the client's pending pipeline forever.
 					const timer = setTimeout(() => {
 						console.error(
-							`[plugin:${pluginId}] message handler 超时（>${MESSAGE_TIMEOUT_MS}ms），已不再等待`,
+							`[plugin:${pluginId}] message handler timed out (>${MESSAGE_TIMEOUT_MS}ms), no longer waiting`,
 						);
 					}, MESSAGE_TIMEOUT_MS);
 					void ret.finally(() => clearTimeout(timer));
@@ -490,7 +506,7 @@ export class PluginManager {
 		}
 	}
 
-	/** 首次安装/能力变更时提醒在线用户（marker 文件记录上次激活时的声明）。 */
+	/** Notify online users on first install / capability change (a marker file records the declaration from the last activation). */
 	private async maybeConsentNotice(info: UiPluginInfo, dir: string, perms: string[]): Promise<void> {
 		try {
 			const markerFile = join(dir, ".pi-approved");
@@ -499,13 +515,13 @@ export class PluginManager {
 			try {
 				prev = JSON.parse(readFileSync(markerFile, "utf8"))?.key ?? "";
 			} catch {
-				/* 无 marker = 首次安装 */
+				/* no marker = first install */
 			}
-			if (prev === key) return; // 同版本能力清单，不再打扰
-			const list = perms.length ? perms.join(", ") : "无";
+			if (prev === key) return; // same-version capability list, do not nag
+			const list = perms.length ? perms.join(", ") : "none";
 			this.notifyAll(
 				perms.length ? "warning" : "info",
-				`插件「${info.name}」已激活（${prev ? "能力清单变更" : "首次安装"}；声明能力：${list}）——请确认来源可信`,
+				`Plugin "${info.name}" activated (${prev ? "permissions changed" : "first install"}; declared: ${list}) — confirm the source is trusted`,
 			);
 			writeFileSync(markerFile, JSON.stringify({ v: 1, key, perms }), "utf8");
 		} catch (err) {
@@ -513,8 +529,8 @@ export class PluginManager {
 		}
 	}
 
-	/** index.ts 的 /plugins-api/:id/* 挂载点转发到这里：找到对应插件的已注册
-	 *  路由并执行；未知插件/路径 → 404，handler 抛错 → 500（不炸进程）。 */
+	/** index.ts's /plugins-api/:id/* mount forwards here: find the matching plugin's
+	 *  registered route and run it; unknown plugin/path → 404, throwing handler → 500 (does not crash the process). */
 	handleHttp(pluginId: string, method: string, pathIn: string, req: Request, res: Response): void {
 		if (!ID_RE.test(pluginId)) {
 			res.status(404).end("plugin not found");
@@ -540,12 +556,12 @@ export class PluginManager {
 		this.deliverAll({ type: "plugin_data", pluginId, payload });
 	}
 
-	/** 系统通知：发给所有 socket（复用 notice 消息，前端 toast 展示）。 */
+	/** System notice: send to every socket (reuses the notice message; the frontend shows a toast). */
 	notifyAll(level: "info" | "warning" | "error", text: string): void {
 		this.deliverAll({ type: "notice", level, text });
 	}
 
-	/** 给指定客户端定向发一条插件消息；找不到该 socket 时静默忽略。 */
+	/** Send a directed plugin message to one client; silently ignored if that socket is not found. */
 	sendTo(clientId: string, pluginId: string, payload: unknown): void {
 		for (const s of this.senders) {
 			if (s.cid() !== clientId) continue;
@@ -557,15 +573,16 @@ export class PluginManager {
 		}
 	}
 
-	/** 目录清单 + 当前 epoch 推给所有 socket。 */
+	/** Push the catalog + current epoch to every socket. */
 	async pushToAll(): Promise<void> {
 		const list = await this.scan();
 		this.deliverAll({ type: "plugins", plugins: list, epoch: this.epochCounter });
 	}
 
-	/** 服务端热重载：反激活全部 → 清缓存 → 重扫重激活 → epoch+1。
-	 *  返回新目录清单（含激活结果）。重激活后的插件实例是新模块，
-		 *  内存状态为初始值——逐个客户端触发 onAttach 让它们重推自身状态。 */
+	/** Server hot-reload: deactivate all → clear cache → re-scan and re-activate → epoch+1.
+	 *  Returns the new catalog (including activation results). Re-activated plugin
+		 *  instances are new modules with initial in-memory state — fire onAttach per
+		 *  client so they re-push their own state. */
 	async reload(): Promise<UiPluginInfo[]> {
 		this.dispose();
 		this.attempted.clear();
@@ -578,8 +595,8 @@ export class PluginManager {
 		return list;
 	}
 
-	/** 每个客户端 attach 后调用：让各插件向该客户端推送自身完整状态。
-	 *  异常隔离——单个插件钩子报错不影响其他插件与其他钩子。 */
+	/** Called after each client attach: let every plugin push its full state to that client.
+	 *  Exceptions isolated — one plugin hook failing does not affect other plugins or other hooks. */
 	notifyAttach(clientId: string): void {
 		for (const [id, p] of this.loaded) {
 			for (const h of p.attachHandlers) {
@@ -592,7 +609,7 @@ export class PluginManager {
 		}
 	}
 
-	/** agent-service 调：把 SDK 工具执行事件扇出给所有插件（异常隔离）。 */
+	/** Called by agent-service: fan SDK tool-execution events out to every plugin (exceptions isolated). */
 	emitToolEvent(ev: PluginToolEvent): void {
 		for (const p of this.loaded.values()) {
 			for (const h of p.toolHandlers) {
@@ -605,23 +622,23 @@ export class PluginManager {
 		}
 	}
 
-	/** 当前全部插件注册的 AI 工具（扁平化，按插件 id 稳定排序）。 */
+	/** AI tools currently registered by every plugin (flattened, stable-sorted by plugin id). */
 	getAgentTools(): PluginAgentTool[] {
 		const out: PluginAgentTool[] = [];
 		for (const table of [...this.agentTools.values()].sort())
 			out.push(...table.values());
 		return out;
 	}
-	/** 注册一个供 AI 调用的工具；重名拒绝并返回空操作注销函数。 */
+	/** Register a tool the AI can call; a duplicate name is rejected and a no-op unsubscribe is returned. */
 	private registerAgentTool(pluginId: string, tool: PluginAgentTool): () => void {
 		if (!tool || typeof tool.execute !== "function" || !tool.name || !tool.description) {
-			console.error(`[plugin:${pluginId}] registerAgentTool: 缺少 name/description/execute，忽略`);
+			console.error(`[plugin:${pluginId}] registerAgentTool: missing name/description/execute, ignored`);
 			return () => {};
 		}
 		let table = this.agentTools.get(pluginId);
 		if (!table) this.agentTools.set(pluginId, (table = new Map()));
 		if (table.has(tool.name)) {
-			console.error(`[plugin:${pluginId}] AI 工具 "${tool.name}" 重复注册，忽略`);
+			console.error(`[plugin:${pluginId}] AI tool "${tool.name}" already registered, ignored`);
 			return () => {};
 		}
 		table.set(tool.name, tool);
@@ -643,29 +660,29 @@ export class PluginManager {
 		};
 	}
 
-	/** 注册斜杠命令：跨插件重名拒绝（先注册者胜出），onCommandsChanged 通知目录刷新。 */
+	/** Register a slash command: duplicate names across plugins are rejected (first registrant wins); onCommandsChanged notifies a catalog refresh. */
 	private registerCommand(pluginId: string, cmd: PluginCommandDef): () => void {
-		const name = String(cmd?.name ?? "").replace(/^\/+/, ""); // 容忍误带的前导 /
+		const name = String(cmd?.name ?? "").replace(/^\/+/, ""); // tolerate a mistaken leading /
 		if (!/^[a-zA-Z][a-zA-Z0-9:_-]*$/.test(name)) {
 			console.error(
-				`[plugin:${pluginId}] registerCommand: 非法名称「${cmd?.name}」（需字母开头，允许字母数字:_-），忽略`,
+				`[plugin:${pluginId}] registerCommand: illegal name "${cmd?.name}" (must start with a letter; letters/digits/:_- allowed), ignored`,
 			);
 			return () => {};
 		}
 		if (typeof cmd?.run !== "function") {
-			console.error(`[plugin:${pluginId}] registerCommand: ${name} 缺少 run，忽略`);
+			console.error(`[plugin:${pluginId}] registerCommand: ${name} is missing run, ignored`);
 			return () => {};
 		}
 		for (const [pid, table] of this.pluginCommands) {
 			if (table.has(name) && pid !== pluginId) {
-				console.error(`[plugin:${pluginId}] 命令 /${name} 已被插件 ${pid} 注册，忽略重复`);
+				console.error(`[plugin:${pluginId}] command /${name} is already registered by plugin ${pid}, ignoring duplicate`);
 				return () => {};
 			}
 		}
 		let table = this.pluginCommands.get(pluginId);
 		if (!table) this.pluginCommands.set(pluginId, (table = new Map()));
 		if (table.has(name)) {
-			console.error(`[plugin:${pluginId}] 命令 /${name} 重复注册，忽略`);
+			console.error(`[plugin:${pluginId}] command /${name} already registered, ignored`);
 			return () => {};
 		}
 		const def: PluginCommandDef = { ...cmd, name };
@@ -698,23 +715,23 @@ export class PluginManager {
 		}
 	}
 
-	/** 当前目录清单（重扫 manifest，不重新 import）。 */
+	/** Current catalog (re-scan manifests, do not re-import). */
 	async list(): Promise<UiPluginInfo[]> {
 		return this.scan();
 	}
 
 	/**
-	 * attach 时调用：重扫目录 + 激活尚未加载的新插件。
-	 * 返回给浏览器的目录（含激活失败的条目，前端显示为不可用）。
+	 * Called on attach: re-scan the directory + activate new plugins not yet loaded.
+	 * Returns the catalog for the browser (including entries that failed to activate, shown as unavailable).
 	 */
 	async ensureLoaded(): Promise<UiPluginInfo[]> {
 		const found = await this.scan();
 		for (const info of found) {
 			if (this.loaded.has(info.id) || this.attempted.has(info.id)) continue;
-			if (!existsSync(join(this.pluginsDir, info.id, "index.mjs"))) continue; // 纯前端插件
+			if (!existsSync(join(this.pluginsDir, info.id, "index.mjs"))) continue; // frontend-only plugin
 			await this.activate(info);
 		}
-		// 已被删除的插件：调用 deactivate 并移出缓存
+		// Plugins that have been deleted: call deactivate and drop from the cache
 		for (const [id, p] of [...this.loaded]) {
 			if (!found.some((f) => f.id === id)) {
 				this.deactivateEntry(id, p);
@@ -723,7 +740,7 @@ export class PluginManager {
 		return found.map((f) => this.loaded.get(f.id)?.info ?? f);
 	}
 
-	/** 反激活单个插件：deactivate + 注销 AI 工具 + 清缓存。 */
+	/** Deactivate a single plugin: deactivate + unregister AI tools + clear cache. */
 	private deactivateEntry(id: string, p: LoadedPlugin): void {
 		try {
 			p.deactivate?.();
@@ -742,7 +759,7 @@ export class PluginManager {
 		console.log(`[plugin:${id}] removed`);
 	}
 
-	/** 关机时反激活全部插件。 */
+	/** Deactivate every plugin on shutdown. */
 	dispose(): void {
 		for (const [id, p] of this.loaded) {
 			try {
@@ -757,7 +774,7 @@ export class PluginManager {
 					/* shutting down */
 				}
 			}
-			// 反激活时停掉它注册的常驻后台任务（轮询器等），不留孤儿计时器。
+			// On deactivate, stop resident background tasks it registered (pollers, etc.) so no orphan timers remain.
 			for (const t of this.pluginBgTasks.get(id)?.values() ?? []) {
 				try {
 					t.stop?.();
@@ -769,13 +786,13 @@ export class PluginManager {
 		this.messageHandlers.clear();
 	}
 
-	/** 读 manifest 清单；坏目录（无 manifest/id 非法）直接跳过。 */
+	/** Read the manifest catalog; skip bad directories (no manifest / illegal id). */
 	private async scan(): Promise<UiPluginInfo[]> {
 		let names: string[];
 		try {
 			names = await readdir(this.pluginsDir);
 		} catch {
-			return []; // 目录不存在 = 没装任何插件
+			return []; // directory missing = no plugins installed
 		}
 		const out: UiPluginInfo[] = [];
 		for (const name of names.sort()) {
@@ -803,15 +820,15 @@ export class PluginManager {
 					icon: typeof m.icon === "string" && m.icon.trim() ? m.icon.trim() : undefined,
 					hasClient: existsSync(join(dir, "client", "entry.mjs")),
 					error: this.loaded.get(name)?.info.error,
-					// manifest 声明的能力清单（fs/net/tools…）——设置面板展示用
+					// Capability list declared in the manifest (fs/net/tools…) — shown in the settings panel
 					permissions: Array.isArray(m.permissions)
 						? m.permissions.filter((p): p is string => typeof p === "string" && p.length > 0).slice(0, 16)
 						: undefined,
-					// 声明式设置 schema + 当前存值（⚙ 面板自动渲染表单用）
+					// Declarative settings schema + current stored values (for the ⚙ panel to auto-render the form)
 					settingsSchema: parseSettingsSchema(m.settings),
 					settingsValues: storedSettingsValues(dir, parseSettingsSchema(m.settings)),
-				// 安装来源（pi-web-ui install 写入的 .pi-source.json）——
-				// 设置面板据此显示「更新」按钮；手工拷入的插件没有此文件。
+				// Install source (.pi-source.json written by pi-web-ui install) —
+				// the settings panel shows an Update button from this; hand-copied plugins have no such file.
 				source: await readFile(join(dir, ".pi-source.json"), "utf8")
 					.then((raw) => {
 						try {
@@ -824,7 +841,7 @@ export class PluginManager {
 					.catch(() => undefined),
 				});
 			} catch {
-				continue; // 无 manifest / JSON 坏 —— 不是插件
+				continue; // no manifest / bad JSON — not a plugin
 			}
 		}
 		return out;
@@ -843,20 +860,22 @@ export class PluginManager {
 		const unregisterCommands: Array<() => void> = [];
 		const bgTaskTable = new Map<string, PluginBgTask>();
 		const settingsHandlers = new Set<(values: Record<string, unknown>) => void>();
-		// 宿主 API 版本协商：插件要的比宿主新 → 明确拒绝（而不是让它在运行期
-		// 撞 undefined 接口莫名其妙地坏）。与激活失败同一处理：error 字段 + 置灰。
+		// Host API version negotiation: if the plugin wants newer than the host → refuse
+		// clearly (instead of mysteriously breaking on undefined at runtime). Same handling
+		// as activation failure: error field + greyed out.
 		let apiVersion = 1;
 		try {
 			apiVersion = Number(JSON.parse(readFileSync(join(dir, "manifest.json"), "utf8")).apiVersion ?? 1) || 1;
 		} catch {}
 		if (apiVersion > PLUGIN_API_VERSION) {
-			const msg = `插件要求宿主 API v${apiVersion}，当前宿主 v${PLUGIN_API_VERSION} —— 请升级 pi-web-ui`;
+			const msg = `Plugin requires host API v${apiVersion}, this host is v${PLUGIN_API_VERSION} — upgrade pi-web-ui`;
 			console.error(`[plugin:${info.id}] ${msg}`);
 			this.loaded.set(info.id, { info: { ...info, error: msg }, toolHandlers, attachHandlers, cwdHandlers, httpRoutes, settingsHandlers: new Set() });
 			return;
 		}
-		// 能力声明：写了 permissions → 严格模式（受控宿主 API 按声明族强制执行）；
-		// 未写且 apiVersion < 2 → 旧全权模式（首次使用受控 API 时警告一次，v2 起默认拒绝）。
+		// Capability declaration: permissions present → strict mode (gated host APIs enforced
+		// by declared family); absent and apiVersion < 2 → legacy full-access (warn once on
+		// first use of a gated API; from v2 the default is deny).
 		const permsDeclared = (info.permissions ?? []).slice();
 		const strict = permsDeclared.length > 0 || apiVersion >= 2;
 		const permFamilies = new Set(permsDeclared.map((x) => x.split(":")[0]!));
@@ -864,28 +883,28 @@ export class PluginManager {
 		p.permsDeclared = permsDeclared;
 		p.permFamilies = permFamilies;
 		p.legacyWarned = false;
-		// 每插件的私有设施：KV 存储 + 加密 secrets + 依赖自动补装（单飞）。
+		// Per-plugin private facilities: KV storage + encrypted secrets + auto dep install (single-flight).
 		const storage = new PluginStorage(join(dir, "storage.json"));
 		const secrets = new PluginSecrets(this.dataDir, dir);
-		// 受限工作区文件访问（能力 "fs" 门控；根随 set_cwd 活值移动）。
+		// Sandboxed workspace file access (gated by the "fs" capability; root follows the live set_cwd value).
 		const workspaceFs = new WorkspaceFS(() => self.cwdValue);
-		/** 能力门控：严格模式下查声明族；旧模式放行但每个激活期只警告一次。
-		 *  返回 false = 已记日志，调用方应拒绝。 */
+		/** Capability gate: in strict mode check the declared family; legacy mode allows
+		 *  but warns once per activation. Return false = already logged, caller should deny. */
 		const can = (family: string): boolean => {
 			if (permFamilies.has(family)) return true;
 			if (!strict) {
 				if (!p.legacyWarned) {
 					p.legacyWarned = true;
 					console.warn(
-						`[plugin:${info.id}] manifest 未声明 permissions（旧格式全权模式）——已放行 "${family}"；apiVersion 2 起将默认拒绝，请尽快声明`,
+						`[plugin:${info.id}] manifest did not declare permissions (legacy full-access mode) — allowing "${family}"; from apiVersion 2 this will be denied by default, please declare`,
 					);
 				}
 				return true;
 			}
-			console.error(`[plugin:${info.id}] 缺少能力声明 "${family}"（manifest.permissions）——请求被拒`);
+			console.error(`[plugin:${info.id}] missing permission "${family}" (manifest.permissions) — request denied`);
 			return false;
 		};
-		const self = this; // 对象字面量 getter 里不能用插件宿主的 this
+		const self = this; // an object-literal getter cannot use the plugin host's this
 		const host: PluginHost = {
 			broadcast: (payload) => this.broadcast(info.id, payload),
 			notify: (level, text) => this.notifyAll(level, text),
@@ -922,13 +941,13 @@ export class PluginManager {
 				if (!can("http")) return () => {};
 				const m = String(method ?? "GET").toUpperCase();
 				if (!["GET", "POST", "PUT", "DELETE"].includes(m) || typeof path !== "string" || !path.startsWith("/") || typeof handler !== "function") {
-					console.error(`[plugin:${info.id}] route: 非法参数（method=${method} path=${path}），忽略`);
+					console.error(`[plugin:${info.id}] route: illegal args (method=${method} path=${path}), ignored`);
 					return () => {};
 				}
 				httpRoutes.set(`${m} ${path}`, handler);
 				return () => httpRoutes.delete(`${m} ${path}`);
 			},
-			// 包一层：插件反激活时自动注销它注册的全部 AI 工具，不留悬挂项。
+			// Wrap: on plugin deactivate, automatically unregister every AI tool it registered so nothing hangs.
 			registerAgentTool: (tool) => {
 				if (!can("tools")) return () => {};
 				const off = this.registerAgentTool(info.id, tool);
@@ -954,7 +973,7 @@ export class PluginManager {
 			registerBackgroundTask: (task) => {
 				const id = String(task?.id ?? "").trim();
 				if (!id || bgTaskTable.has(id)) {
-					console.error(`[plugin:${info.id}] registerBackgroundTask: 非法/重复 id「${task?.id}」，忽略`);
+					console.error(`[plugin:${info.id}] registerBackgroundTask: illegal/duplicate id "${task?.id}", ignored`);
 					return { update: () => {}, unregister: () => {} };
 				}
 				const entry: PluginBgTask = {
@@ -996,8 +1015,8 @@ export class PluginManager {
 			log: (...args) => console.log(`[plugin:${info.id}]`, ...args),
 		};
 		try {
-			// Node 对同一 URL 的 import() 永远返回缓存模块——追加 epoch 作查询串
-			// 击穿缓存，让 plugins_reload 后的重新激活能拿到磁盘上的新代码。
+			// Node's import() of the same URL always returns the cached module — append epoch
+			// as a query string to bust the cache so a re-activate after plugins_reload picks up new code on disk.
 			const mod = (await import(
 				pathToFileURL(join(dir, "index.mjs")).href + `?e=${this.epochCounter}`
 			)) as {
@@ -1018,9 +1037,9 @@ export class PluginManager {
 				settingsHandlers,
 			});
 			console.log(`[plugin:${info.id}] activated (v${info.version ?? "?"})`);
-			// 首次安装/能力变更提醒（尽力而为）：<dir>/.pi-approved 记录上次激活时
-			// 的能力清单——新装或 permissions 变更后向在线客户端推一条警告通知，
-			// 用户装前可见、日常启动不打扰。
+			// First-install / capability-change notice (best-effort): <dir>/.pi-approved records
+			// the capability list from the last activation — after a new install or permissions
+			// change, push a warning to online clients. Visible at install time; daily startup does not nag.
 			void this.maybeConsentNotice(info, dir, permsDeclared);
 		} catch (err) {
 			httpRoutes.clear();
@@ -1038,8 +1057,8 @@ export class PluginManager {
 }
 
 /**
- * 把 /plugins/:id/client/<rest> 安全映射到 <pluginsDir>/<id>/client/<rest>。
- * 返回绝对路径；任何越界/非法 id 返回 null（调用方回 404）。
+ * Safely map /plugins/:id/client/<rest> onto <pluginsDir>/<id>/client/<rest>.
+ * Returns an absolute path; any traversal / illegal id returns null (caller answers 404).
  */
 export function resolvePluginClientFile(
 	pluginsDir: string,
@@ -1048,19 +1067,21 @@ export function resolvePluginClientFile(
 ): string | null {
 	if (!ID_RE.test(id)) return null;
 	const root = resolve(join(pluginsDir, id, "client"));
-	// rest 由 express 路由保证不带 ".."，但双保险：resolve 后必须仍在 root 内
+	// rest is guaranteed by the express route not to contain "..", but belt-and-suspenders: after resolve it must still be inside root
 	const abs = resolve(root, rest);
 	if (abs !== root && !abs.startsWith(root + sep)) return null;
 	return abs;
 }
 
 /**
- * 把插件 AI 工具定义同步进一个「会话状对象」（SDK AgentSession 的结构子集：
- * 内部 _customTools 数组 + _refreshToolRegistry()——refresh 会重读数组，且新
- * 工具名自动加入活跃集）。新增/更新/移除三向 diff；对象不兼容（SDK 改名）返回
- * null 由调用方静默降级。返回新的已注入名单。
+ * Sync plugin AI-tool definitions into a "session-shaped object" (a structural
+ * subset of the SDK AgentSession: the internal _customTools array +
+ * _refreshToolRegistry() — refresh re-reads the array and new tool names join
+ * the active set automatically). Three-way diff of add/update/remove; an
+ * incompatible object (SDK renamed) returns null and the caller silently
+ * degrades. Returns the new injected-name list.
  *
- * 纯函数、不 import SDK —— vitest 直接测（tests/unit/plugin-tools.test.ts）。
+ * Pure function, does not import the SDK — vitest tests it directly (tests/unit/plugin-tools.test.ts).
  */
 export function syncPluginToolsIntoSession(
 	session: {

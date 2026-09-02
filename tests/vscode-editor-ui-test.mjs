@@ -1,13 +1,13 @@
 /**
- * vscode-editor 插件 — 浏览器 UI 冒烟测试（零 token）。
+ * vscode-editor plugin — browser UI smoke (zero token).
  *
- * 起隔离端口 server（临时 data-dir + 临时工作区），Chrome headless 加载页面：
- * - 顶栏出现 📝 插件 tab，点击切到插件视图
- * - 文件树渲染工作区条目
- * - 点击文件 → 标签页出现 + CodeMirror 编辑器带内容
- * - 修改内容 + Ctrl+S → 磁盘落盘核对
+ * Start an isolated-port server (temp data-dir + temp workspace), Chrome headless loads the page:
+ * - top bar shows the 📝 plugin tab; click switches to the plugin view
+ * - file tree renders workspace entries
+ * - click a file → tab appears + CodeMirror editor has content
+ * - edit + Ctrl+S → disk persist check
  *
- * 运行：先 npm run build:server，再 node tests/vscode-editor-ui-test.mjs
+ * Run: npm run build:server, then node tests/vscode-editor-ui-test.mjs
  */
 import { CHROME_PATH } from "./lib/chrome.mjs";
 import { portUp } from "./lib/port-utils.mjs";
@@ -31,7 +31,7 @@ function check(name, ok, extra = "") {
 const dataDir = mkdtempSync(join(tmpdir(), "pi-web-vsc-ui-"));
 const workspace = join(dataDir, "ws");
 
-// 种插件 + 工作区
+// seed plugin + workspace
 const plugDst = join(dataDir, "plugins", "vscode-editor");
 mkdirSync(plugDst, { recursive: true });
 const repo = new globalThis.URL("../", import.meta.url).pathname.replace(/^\/(?=[A-Za-z]:)/, "");
@@ -41,7 +41,7 @@ cpSync(join(repo, "dev/plugins/vscode-editor/client"), join(plugDst, "client"), 
 mkdirSync(join(workspace, "src"), { recursive: true });
 writeFileSync(join(workspace, "README.md"), "# Hello\n");
 writeFileSync(join(workspace, "src", "app.js"), "let n = 1;\n");
-// CRLF 行尾文件（Windows 仓库常见）：回归「刚打开就提示未保存」误报
+// CRLF line-ending file (common in Windows repos): regression for false "unsaved" right after open
 writeFileSync(join(workspace, "src", "crlf.js"), "let a = 1;\r\nlet b = 2;\r\n");
 
 let server = null;
@@ -60,55 +60,55 @@ try {
 	page.on("pageerror", (e) => console.error("[pageerror]", e.message));
 	await page.goto(URL);
 
-	// 等插件清单到达（顶栏出现插件 tab）
+	// wait for the plugin catalog (plugin tab appears in the top bar)
 	await page.waitForSelector("button.plugin-tab", { timeout: 20000 });
-	const tab = page.locator("button.plugin-tab", { hasText: "代码编辑器" }).first();
-	check("顶栏出现 📝 插件 tab", (await tab.count()) > 0);
+	const tab = page.locator("button.plugin-tab", { hasText: "Editor" }).first();
+	check("top bar shows the 📝 plugin tab", (await tab.count()) > 0);
 	await tab.click();
 
-	// 视图挂载 + 文件树渲染
+	// view mounted + file tree rendered
 	await page.waitForSelector(".vsc .vsc-tree .vsc-row", { timeout: 15000 });
 	const rows = await page.locator(".vsc-row .nm").allInnerTexts();
-	check("文件树渲染工作区根目录", rows.includes("src") && rows.includes("README.md"), rows.join(","));
+	check("file tree renders the workspace root", rows.includes("src") && rows.includes("README.md"), rows.join(","));
 
-	// 展开目录
+	// expand directory
 	await page.locator(".vsc-row", { hasText: "src" }).first().click();
 	await sleep(400);
-	check("展开 src 目录可见 app.js", (await page.locator(".vsc-row", { hasText: "app.js" }).count()) > 0);
+	check("expanding src shows app.js", (await page.locator(".vsc-row", { hasText: "app.js" }).count()) > 0);
 
-	// 点击打开 README.md → 标签页 + CodeMirror 内容
+	// click to open README.md → tab + CodeMirror content
 	await page.locator(".vsc-row", { hasText: "README.md" }).first().click();
 	await page.waitForSelector(".vsc-tab.active", { timeout: 10000 });
-	check("标签页出现并激活", (await page.locator(".vsc-tab.active .tn").innerText()).includes("README.md"));
+	check("tab appears and is active", (await page.locator(".vsc-tab.active .tn").innerText()).includes("README.md"));
 	await page.waitForSelector(".vsc-editor .cm-content", { timeout: 10000 });
 	const cmText = await page.locator(".vsc-editor .cm-content").innerText();
-	check("编辑器加载文件内容", cmText.includes("Hello"), cmText);
+	check("editor loaded file content", cmText.includes("Hello"), cmText);
 	const statusPath = await page.locator(".vsc-path").innerText();
-	check("状态栏显示路径", statusPath === "README.md", statusPath);
+	check("status bar shows the path", statusPath === "README.md", statusPath);
 
-	// 编辑 + Ctrl+S 保存 → 磁盘核对
+	// edit + Ctrl+S save → disk check
 	await page.locator(".vsc-editor .cm-content").click();
 	await page.keyboard.press("Control+End");
 	await page.keyboard.type("\nedited-by-test\n");
 	await page.keyboard.press("Control+s");
 	await sleep(600);
 	const onDisk = readFileSync(join(workspace, "README.md"), "utf-8");
-	check("Ctrl+S 保存落盘", onDisk.includes("edited-by-test"), JSON.stringify(onDisk));
+	check("Ctrl+S save persisted to disk", onDisk.includes("edited-by-test"), JSON.stringify(onDisk));
 	const stState = await page.locator(".vsc-state").innerText();
-	check("状态栏显示已保存", stState.includes("已保存"), stState);
+	check("status bar shows saved", stState.includes("Saved"), stState);
 	const dirtyDot = await page.locator(".vsc-tab .dot").count();
-	check("保存后脏标记消失", dirtyDot === 0, `dot=${dirtyDot}`);
+	check("dirty marker gone after save", dirtyDot === 0, `dot=${dirtyDot}`);
 
-	// CRLF 回归：打开零修改的 CRLF 文件直接关闭，不得弹「未保存」确认框
+	// CRLF regression: open an unmodified CRLF file and close it immediately; must not show an "unsaved" confirm
 	let dialogFired = false;
 	page.on("dialog", (d) => { dialogFired = true; void d.dismiss(); });
 	await page.locator(".vsc-row", { hasText: "crlf.js" }).first().click();
 	await sleep(400);
 	await page.locator(".vsc-tab.active .x").click();
 	await sleep(300);
-	check("CRLF 文件零修改关闭不弹确认框", !dialogFired);
+	check("closing an unmodified CRLF file does not show a confirm dialog", !dialogFired);
 
-	// CRLF 保存后磁盘行尾保持
+	// after CRLF save, disk line endings are kept
 	await page.locator(".vsc-row", { hasText: "crlf.js" }).first().click();
 	await sleep(400);
 	await page.locator(".vsc-editor .cm-content").click();
@@ -117,9 +117,9 @@ try {
 	await page.keyboard.press("Control+s");
 	await sleep(600);
 	const crlfDisk = readFileSync(join(workspace, "src", "crlf.js"), "utf-8");
-	check("CRLF 文件保存后行尾保持 \\r\\n", crlfDisk.includes("let c = 3;") && !/(?<!\r)\n/.test(crlfDisk), JSON.stringify(crlfDisk));
+	check("CRLF file keeps \\r\\n endings after save", crlfDisk.includes("let c = 3;") && !/(?<!\r)\n/.test(crlfDisk), JSON.stringify(crlfDisk));
 
-	// Ctrl+P 快速打开
+	// Ctrl+P quick open
 	await page.keyboard.press("Control+p");
 	await page.waitForSelector(".vsc-quickopen input", { timeout: 5000 });
 	await page.locator(".vsc-quickopen input").fill("app");
@@ -127,7 +127,7 @@ try {
 	await page.keyboard.press("Enter");
 	await sleep(500);
 	const activeTab = await page.locator(".vsc-tab.active .tn").innerText().catch(() => "");
-	check("Ctrl+P 快速打开 app.js", activeTab.includes("app.js"), activeTab);
+	check("Ctrl+P quick-opened app.js", activeTab.includes("app.js"), activeTab);
 
 	await browser.close();
 } catch (err) {

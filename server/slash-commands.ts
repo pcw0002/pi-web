@@ -1,41 +1,49 @@
 /**
- * slash-commands — 斜杠命令目录与内置命令执行，从 agent-service.ts 抽出。
+ * slash-commands — slash-command catalog and native-command execution,
+ * extracted from agent-service.ts.
  *
- * 职责：
- *  - NATIVE_COMMANDS：web 服务端原生实现的斜杠命令清单（pi CLI 的交互式内置命令
- *    如 /model /new 不经 SDK prompt()——不拦截会被当普通文本发给模型）
- *  - push()：目录 = 内置命令 + 活动对话的扩展命令 / 提示模板 / 技能（与 SDK
- *    展开行为一致），推 slash_commands 供输入框选择器使用
- *  - exec()：拦截执行内置命令；返回 false 表示非内置命令，prompt 落到 SDK
+ * Owns:
+ *  - NATIVE_COMMANDS: slash commands implemented by the web server (pi CLI
+ *    interactive built-ins like /model /new must not go through SDK prompt()
+ *    — unintercepted they would be sent to the model as plain text)
+ *  - push(): catalog = built-ins + the active conversation's extension
+ *    commands / prompt templates / skills (same expansion as the SDK),
+ *    pushed as slash_commands for the input-box picker
+ *  - exec(): intercept and run built-ins; return false for non-native
+ *    commands so prompt falls through to the SDK
  *
- * 经 SlashHost 窄接口与 ClientSession 解耦（同 settings-service/goal-service 模式）。
- * UI 文案直接中文（服务端 notice 约定）。/help 与 /copy 是纯客户端动作（不到服务端），
- * 保留在目录里供选择器展示，exec 里吞掉防止 SDK 当文本。
+ * Decoupled from ClientSession via SlashHost (same pattern as settings-service/goal-service).
+ * Server notices are English. /help and /copy are client-only (never reach the
+ * server); they stay in the catalog for the picker, and exec swallows them so
+ * the SDK does not treat them as text.
  */
 import type { AgentSession } from "@earendil-works/pi-coding-agent";
 import type { ServerMessage, SlashCommandInfo } from "./protocol.js";
 import type { PluginCommandDef } from "./plugins.js";
 
-/** ClientSession 提供给本服务的宿主能力（窄接口，便于独立测试）。 */
+/** Host capabilities ClientSession provides to this service (narrow interface, easy to unit-test). */
 export interface SlashHost {
 	emit: (msg: ServerMessage) => void;
-	/** 当前工作目录（/cwd 无参数时回显）。 */
+	/** Current working directory (echoed by /cwd with no argument). */
 	cwd: () => string;
-	/** 活动对话的 session。 */
+	/** Session of the active conversation. */
 	getSession: () => AgentSession;
 	newChat: () => Promise<void>;
 	setModel: (modelId: string) => Promise<void>;
 	setCwd: (path: string) => Promise<void>;
 	setThinking: (level: "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max") => void;
 	refreshSessions: () => Promise<void>;
-	/** supervisor 的优雅重启调度；返回 false 时 exec 兜底 process.exit(0)。 */
+	/** Supervisor graceful-restart scheduler; exec falls back to process.exit(0) when this returns false. */
 	onQuit?: () => boolean;
-	/** session.reload() 之后的钩子（重放终端工具开关等设置门控）。 */
+	/** Hook after session.reload() (replay settings gates such as the terminal-tools toggle). */
 	afterReload?: () => void;
-	/** 插件注册的斜杠命令（registerCommand）——目录展示 + exec 拦截执行。 */
+	setSessionName?: (name: string) => void;
+	emitSessionTree?: () => void;
+	exportSession?: () => Promise<void>;
+	/** Plugin-registered slash commands (registerCommand) — catalog display + exec intercept. */
 	pluginCommands?: () => PluginCommandDef[];
-	/** 执行一个插件命令：找到并调用 run，返回 true；没这个命令返回 false。
-	 *  放在宿主层而不是本服务里，因为 clientId/通知回显需要 ClientSession 环境。 */
+	/** Run a plugin command: find and call run, return true; return false if there is no such command.
+	 *  Lives on the host, not this service, because clientId / notice echo need the ClientSession environment. */
 	execPluginCommand?: (name: string, args: string) => Promise<boolean> | boolean;
 }
 
@@ -46,26 +54,25 @@ export interface SlashHost {
 export const NATIVE_COMMANDS: {
 	name: string;
 	description: string;
-	descriptionEn: string;
 	argumentHint?: string;
-	argumentHintEn?: string;
 }[] = [
-	{ name: "new", description: "新建对话", descriptionEn: "New chat" },
-	{ name: "model", description: "切换模型", descriptionEn: "Switch model", argumentHint: "[名称]", argumentHintEn: "[name]" },
-	{ name: "compact", description: "压缩上下文", descriptionEn: "Compact context", argumentHint: "[说明]", argumentHintEn: "[instructions]" },
-	{ name: "cwd", description: "切换工作目录", descriptionEn: "Switch workspace", argumentHint: "<路径>", argumentHintEn: "<path>" },
+	{ name: "new", description: "New chat" },
+	{ name: "model", description: "Switch model", argumentHint: "[name]" },
+	{ name: "compact", description: "Compact context", argumentHint: "[instructions]" },
+	{ name: "cwd", description: "Switch workspace", argumentHint: "<path>" },
 	{
 		name: "thinking",
-		description: "设置思考强度",
-		descriptionEn: "Set thinking level",
-		argumentHint: "<off|low|medium|high|xhigh|max>",
-		argumentHintEn: "<off|low|medium|high|xhigh|max>",
+		description: "Set thinking level",
+		argumentHint: "<off|minimal|low|medium|high|xhigh|max>",
 	},
-	{ name: "resume", description: "刷新会话列表", descriptionEn: "Refresh session list" },
-	{ name: "reload", description: "重新加载扩展、技能与模板", descriptionEn: "Reload extensions, skills & templates" },
-	{ name: "help", description: "显示全部命令", descriptionEn: "Show all commands" },
-	{ name: "copy", description: "复制上一条助手回复", descriptionEn: "Copy last assistant reply" },
-	{ name: "pi-web-ui:quit", description: "退出服务", descriptionEn: "Quit server (supervisor will restart)" },
+	{ name: "resume", description: "Refresh session list" },
+	{ name: "name", description: "Name this session", argumentHint: "<name>" },
+	{ name: "tree", description: "Session tree: jump to an earlier question" },
+	{ name: "export", description: "Export this session as HTML" },
+	{ name: "reload", description: "Reload extensions, skills & templates" },
+	{ name: "help", description: "Show all commands" },
+	{ name: "copy", description: "Copy last assistant reply" },
+	{ name: "pi-web-ui:quit", description: "Quit server (supervisor will restart)" },
 ];
 
 /** Parse a prompt into "/command args" — returns null when it isn't one. */
@@ -131,15 +138,13 @@ export class SlashCommandsService {
 		} catch {
 			// Session not ready yet — native-only catalog still serves the picker.
 		}
-		// UI 插件注册的命令（host.registerCommand）——全局，不依赖会话就绪。
+		// UI-plugin-registered commands (host.registerCommand) — global, do not require a ready session.
 		for (const cmd of this.host.pluginCommands?.() ?? []) {
-			if (seen.has(cmd.name)) continue; // 与内置/扩展重名时先到先得（内置优先）
+			if (seen.has(cmd.name)) continue; // first-come on name clash with built-in/extension (built-in wins)
 			commands.push({
 				name: cmd.name,
 				description: cmd.description,
-				descriptionEn: cmd.descriptionEn,
 				argumentHint: cmd.argumentHint,
-				argumentHintEn: cmd.argumentHintEn,
 				source: "plugin",
 			});
 			seen.add(cmd.name);
@@ -161,8 +166,8 @@ export class SlashCommandsService {
 						type: "notice",
 						level: "info",
 						text: current
-							? `当前模型：${current.name}（${current.provider}/${current.id}）。用法：/model <名称>`
-							: `用法：/model <名称>`,
+							? `Current model: ${current.name} (${current.provider}/${current.id}). Usage: /model <name>`
+							: `Usage: /model <name>`,
 					});
 					return true;
 				}
@@ -184,7 +189,7 @@ export class SlashCommandsService {
 					this.host.emit({
 						type: "notice",
 						level: "error",
-						text: `没有匹配到模型：${args}（可用模型见顶栏模型列表）`,
+						text: `No matching model: ${args} (see the model list in the top bar)`,
 					});
 					return true;
 				}
@@ -193,7 +198,7 @@ export class SlashCommandsService {
 					this.host.emit({
 						type: "notice",
 						level: "warning",
-						text: `找到 ${matches.length} 个匹配模型，已选用：${pick.name}（精确匹配请用 provider/id）`,
+						text: `Found ${matches.length} matching models, using ${pick.name} (use provider/id for an exact match)`,
 					});
 				}
 				await this.host.setModel(`${pick.provider}/${pick.id}`);
@@ -206,7 +211,7 @@ export class SlashCommandsService {
 					this.host.emit({
 						type: "notice",
 						level: "error",
-						text: `压缩上下文失败：${(err as Error).message}`,
+						text: `Failed to compact context: ${(err as Error).message}`,
 					});
 				}
 				return true;
@@ -215,35 +220,28 @@ export class SlashCommandsService {
 					this.host.emit({
 						type: "notice",
 						level: "info",
-						text: `当前工作目录：${this.host.cwd()}。用法：/cwd <路径>`,
+						text: `Current workspace: ${this.host.cwd()}. Usage: /cwd <path>`,
 					});
 				} else {
 					await this.host.setCwd(args);
 				}
 				return true;
 			case "thinking": {
-				const ALIAS: Record<string, string> = {
-					off: "off",
-					minimal: "minimal",
-					low: "low",
-					medium: "medium",
-					high: "high",
-					xhigh: "xhigh",
-					max: "max",
-					关闭: "off",
-					极简: "minimal",
-					低: "low",
-					中: "medium",
-					高: "high",
-					极高: "xhigh",
-					最大: "max",
-				};
-				const level = ALIAS[args.trim().toLowerCase()];
-				if (!level) {
+				const level = args.trim().toLowerCase();
+				const allowed = new Set([
+					"off",
+					"minimal",
+					"low",
+					"medium",
+					"high",
+					"xhigh",
+					"max",
+				]);
+				if (!allowed.has(level)) {
 					this.host.emit({
 						type: "notice",
 						level: "error",
-						text: `无效的思考强度：${args || "（空）"}。可用：off / minimal / low / medium / high / xhigh / max`,
+						text: `Invalid thinking level: ${args || "(empty)"}. Use: off / minimal / low / medium / high / xhigh / max`,
 					});
 					return true;
 				}
@@ -255,27 +253,47 @@ export class SlashCommandsService {
 				this.host.emit({
 					type: "notice",
 					level: "info",
-					text: "会话列表已刷新，请在左侧「历史对话」中选择",
+					text: "Session list refreshed — pick one from History on the left",
 				});
+				return true;
+			case "name": {
+				const n = args.trim();
+				if (!n) {
+					const current = this.host.getSession().sessionManager.getSessionName();
+					this.host.emit({
+						type: "notice",
+						level: "info",
+						text: current ? `Current session name: ${current}. Usage: /name <name>` : "Usage: /name <name>",
+					});
+					return true;
+				}
+				this.host.setSessionName?.(n);
+				return true;
+			}
+			case "tree":
+				this.host.emitSessionTree?.();
+				return true;
+			case "export":
+				await this.host.exportSession?.();
 				return true;
 			case "reload":
 				try {
 					// Re-discovers extensions / skills / prompt templates from disk and
 					// re-pushes the picker catalog (the CLI's /reload semantics).
 					await this.host.getSession().reload();
-					// reload() 会把 custom 工具加回活跃集——重放设置门控（终端开关等）。
+					// reload() puts custom tools back into the active set — replay settings gates (terminal toggle, etc.).
 					this.host.afterReload?.();
 					await this.push();
 					this.host.emit({
 						type: "notice",
 						level: "info",
-						text: "已重新加载扩展、技能与提示模板",
+						text: "Reloaded extensions, skills, and prompt templates",
 					});
 				} catch (err) {
 					this.host.emit({
 						type: "notice",
 						level: "error",
-						text: `重新加载失败：${(err as Error).message}`,
+						text: `Reload failed: ${(err as Error).message}`,
 					});
 				}
 				return true;
@@ -283,7 +301,7 @@ export class SlashCommandsService {
 				this.host.emit({
 					type: "notice",
 					level: "info",
-					text: "正在退出 pi-web-ui… supervisor 将自动重启服务",
+					text: "Exiting pi-web-ui… the supervisor will restart the server",
 				});
 				setTimeout(() => {
 					const didSchedule = this.host.onQuit?.() ?? false;
@@ -299,7 +317,7 @@ export class SlashCommandsService {
 				// swallow here so the SDK never sees them as plain prompt text.
 				return true;
 			default:
-				// 插件命令：拦截执行（纯配置动作，与内置命令同级，不到 SDK）。
+				// Plugin command: intercept and run (pure config action, same level as built-ins, never reaches the SDK).
 				return (await this.host.execPluginCommand?.(name, args)) ?? false;
 		}
 	}

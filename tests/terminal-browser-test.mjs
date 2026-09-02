@@ -109,12 +109,12 @@ async function main() {
 	}
 
 	// Switch to the terminal view.
-	await page.click('.view-switch button:has-text("终端")');
+	await page.click('.view-switch button:has-text("Terminal")');
 	await page.waitForSelector(".terminal-view", { timeout: 5000 });
 	check("terminal view renders", true);
 	// Opening the terminal view creates a default shell. Close it so the
 	// command-list assertions below exercise a single command terminal.
-	const initialShell = page.locator(".term-tab", { hasText: "终端 1" });
+	const initialShell = page.locator(".term-tab", { hasText: "Terminal 1" });
 	if (await initialShell.count()) await initialShell.locator(".term-tab-close").click();
 	await sleep(300);
 
@@ -225,9 +225,9 @@ async function main() {
 	check("second tab + shell prompt", true);
 
 	// Switch back to chat view — terminals must SURVIVE (no unmount kill).
-	await page.click('.view-switch button:has-text("对话")');
+	await page.click('.view-switch button:has-text("Chat")');
 	await sleep(800);
-	await page.click('.view-switch button:has-text("终端")');
+	await page.click('.view-switch button:has-text("Terminal")');
 	await sleep(800);
 	check(
 		"terminals survive view switch",
@@ -246,12 +246,12 @@ async function main() {
 	// remain switchable after creating a new chat, and its PTY/tab must return.
 	await page.click(".newchat");
 	await sleep(1800);
-	await page.click('.view-switch button:has-text("对话")');
+	await page.click('.view-switch button:has-text("Chat")');
 	await page.waitForSelector(".panel-convs .session-item", { timeout: 5000 });
 	check("conversation with terminal remains listed", (await page.locator(".panel-convs .session-item").count()) >= 1);
 	await page.locator(".panel-convs .session-item").first().click();
 	await sleep(900);
-	await page.click('.view-switch button:has-text("终端")');
+	await page.click('.view-switch button:has-text("Terminal")');
 	await sleep(900);
 	check("switching back restores conversation terminal", (await page.locator(".term-tab").count()) === 1);
 

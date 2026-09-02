@@ -1,10 +1,12 @@
 /**
- * webui-context — 扩展 UI 桥：把扩展的 setWidget/setStatus/notify/select/
- * confirm/input 等调用桥接到浏览器（widgets/statuses/notice/dialog 消息）。
- * TUI 专属能力（终端输入、footer/header、自定义组件）为惰性 no-op；
- * select/confirm/input 弹窗经 dialog_response 回传，Esc 视为取消。
+ * webui-context — extension UI bridge: routes the extension's
+ * setWidget / setStatus / notify / select / confirm / input calls to the
+ * browser (widgets / statuses / notice / dialog messages). TUI-only
+ * capabilities (terminal input, footer/header, custom components) are
+ * lazy no-ops. select / confirm / input dialogs round-trip via
+ * dialog_response; Esc is treated as cancel.
  *
- * 从 agent-service.ts 抽出，行为保持不变。
+ * Extracted from agent-service.ts with behavior unchanged.
  */
 import type {
 	ExtensionUIContext,
@@ -14,8 +16,9 @@ import type { ServerMessage } from "./protocol.js";
 
 const WIDGET_WIDTH = 80;
 
-/** ANSI 转义序列（CSI + OSC 两类）：扩展 widget/status 文本里常混有 TUI 颜色码
- *  （如 pi-powerline-footer），浏览器会把它渲染成字面 `[38;5;244m` 乱码（issue #16）。 */
+/** ANSI escape sequences (CSI + OSC): extension widget/status text often
+ *  mixes in TUI color codes (e.g. pi-powerline-footer). The browser would
+ *  render them as a literal `[38;5;244m` mojibake (issue #16). */
 const ANSI_RE = /\[[0-9:;<=>?]*[ -/]*[@-~]|\][^\u0007\u001b]*(?:\u0007|\u001b\\)/g;
 
 /** Strip all ANSI escape sequences (CSI/OSC) from a string. */
@@ -144,7 +147,7 @@ export class WebUIContext {
 			} catch {
 				lines = undefined;
 			}
-			// 浏览器不是终端：ANSI 颜色码剥掉再下发/比对（issue #16）。
+			// The browser is not a terminal: strip ANSI color codes before emit/compare (issue #16).
 			const clean = lines?.map(stripAnsi) ?? undefined;
 			this.lastLines.set(key, clean ?? []);
 			return { key, lines: clean ?? [] };
@@ -165,7 +168,7 @@ export class WebUIContext {
 		if (text === undefined || text === "") {
 			this.statuses.delete(key);
 		} else {
-			// 入口处剥 ANSI：pushStatuses / statusSnapshot 两条路径都拿到干净文本。
+			// Strip ANSI at the entry so both pushStatuses and statusSnapshot see clean text.
 			const clean = stripAnsi(text);
 			if (clean === "") this.statuses.delete(key);
 			else this.statuses.set(key, clean);

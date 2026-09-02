@@ -1,14 +1,14 @@
 /**
- * file-upload-test.mjs — 纯 WebSocket 冒烟测试：验证「上传文件」协议路径。
+ * file-upload-test.mjs — pure WebSocket smoke: verify the "upload file" protocol path.
  *
- * 发送带 fileData（raw base64）附件的 prompt，验证：
- *   1. 小文本文件 → inline（内容进上下文）
- *   2. 二进制文件 → reference（绝对路径 + size）
- *   3. 文件落盘在 <dataDir>/uploads/<clientId>/ 下
- *   4. 超限（>20MB）被拒并回 notice
+ * Send a prompt with a fileData (raw base64) attachment and verify:
+ *   1. small text file → inline (content in context)
+ *   2. binary file → reference (absolute path + size)
+ *   3. file lands under <dataDir>/uploads/<clientId>/
+ *   4. over limit (>20MB) is refused with a notice
  *
- * 用法（需先有 server 在跑）:
- *   node file-upload-test.mjs   # 连 ws://localhost:${PORT:-8787}
+ * Usage (needs a server already running):
+ *   node file-upload-test.mjs   # connect ws://localhost:${PORT:-8787}
  */
 import { randomUUID } from "node:crypto";
 import WebSocket from "ws";
@@ -19,7 +19,7 @@ const WS_URL = `ws://localhost:${PORT}/ws`;
 const clientId = randomUUID();
 const ws = new WebSocket(WS_URL);
 
-const TEXT_SMALL = Buffer.from("你好，这是一个小文本文件。\nsecond line\n").toString(
+const TEXT_SMALL = Buffer.from("hello, this is a small text file.\nsecond line\n").toString(
 	"base64",
 );
 const TEXT_BIG = Buffer.from("x".repeat(30 * 1024)).toString("base64"); // 30KB > 12KB inline cap
@@ -50,7 +50,7 @@ ws.on("message", async (d) => {
 		ws.send(
 			JSON.stringify({
 				type: "prompt",
-				text: "看看这些文件",
+				text: "look at these files",
 				attachments: [
 					{ path: "", fileData: TEXT_SMALL, name: "small.txt", size: 0 },
 					{ path: "", fileData: TEXT_BIG, name: "big.txt", size: 0 },
@@ -67,7 +67,7 @@ ws.on("message", async (d) => {
 				const text = (msg.content ?? [])
 					.map((b) => (b.type === "text" ? b.text : ""))
 					.join("");
-				if (!results.inline && text.includes("你好") && text.includes("small.txt")) {
+				if (!results.inline && text.includes("hello") && text.includes("small.txt")) {
 					results.inline = true;
 					log("OK: small text inlined:", name, msg.details.size, "bytes");
 				}

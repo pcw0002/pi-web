@@ -1,12 +1,12 @@
-/* 终端接管 bash（terminal-backed bash tool）回归：直接实例化
- * TerminalManager + makeTerminalBashTool（真实 PTY，不起 server、零 token）：
- *   1. 纯函数：buildTerminalBashLine 单行/多行、stripAnsi；
- *   2. 阻塞语义：echo 快速命令等哨兵返回完整输出 + 真实退出码；
- *   3. 多行脚本（eval $'...' 转义路径）正常执行；
- *   4. 静默解阻：连续无输出达阈值立即返回 running:true，命令后台跑完由
- *      notifyBackgroundDone 回调通知退出码；
- *   5. shell 状态跨调用保留（cd 后 pwd 不变——原生 bash 做不到）；
- *   6. abort_bash：阻塞期间 abort → Ctrl+C 杀前台进程，快速返回。
+/* Terminal-backed bash tool regression: instantiate TerminalManager +
+ * makeTerminalBashTool directly (real PTY, no server, zero token):
+ *   1. pure functions: buildTerminalBashLine single/multi-line, stripAnsi;
+ *   2. blocking semantics: a fast echo waits for the sentinel and returns full output + real exit code;
+ *   3. multi-line scripts (eval $'...' escape path) execute correctly;
+ *   4. silent unblock: after idle-threshold with no output, return running:true immediately; when
+ *      the command finishes in the background, notifyBackgroundDone reports the exit code;
+ *   5. shell state is kept across calls (pwd after cd stays — native bash cannot do this);
+ *   6. abort_bash: abort while blocked → Ctrl+C kills the foreground process, returns quickly.
  * Run:  npm run build:server && node tests/terminal-bash-test.mjs */
 import { mkdtempSync, mkdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -32,20 +32,20 @@ const check = (name, cond, extra = "") => {
 	}
 };
 
-// ---- 1. 纯函数 ----
+// ---- 1. pure functions ----
 {
 	const line = buildTerminalBashLine("ls -la");
-	check("单行命令追加哨兵序列", line.includes("ls -la") && line.includes("[pi-exit:%s]") && line.includes("__pi_rc=$?"));
+	check("single-line command appends the sentinel sequence", line.includes("ls -la") && line.includes("[pi-exit:%s]") && line.includes("__pi_rc=$?"));
 	const ml = buildTerminalBashLine("for i in 1 2\ndo\n echo $i\ndone");
-	check("多行脚本包进 eval $'...'", ml.startsWith("eval $'") && ml.includes("\\n") && !ml.includes("\n"));
-	check("多行脚本仍是一行物理输入", !ml.includes("\n"));
+	check("multi-line script is wrapped in eval $'...'", ml.startsWith("eval $'") && ml.includes("\\n") && !ml.includes("\n"));
+	check("multi-line script is still one physical input line", !ml.includes("\n"));
 	const stripped = stripAnsi("\x1b[31m红\x1b[0m\x1b]0;title\x07文\r\nx\ry");
-	check("stripAnsi 清理颜色/OSC/孤立CR", stripped === "红文\r\nxy");
+	check("stripAnsi strips color/OSC/orphan CR", stripped === "红文\r\nxy");
 }
 
 const mgr = new TerminalManager(() => {}, workdir);
 let bgDone = null;
-let idleMsOverride = 0; // 默认永不静默解阻（纯阻塞模式），个别用例注入小阈值
+let idleMsOverride = 0; // default: never silent-unblock (pure blocking); some cases inject a small threshold
 const tool = makeTerminalBashTool(mgr, {
 	cwd: workdir,
 	idleMs: () => idleMsOverride,
@@ -55,10 +55,10 @@ const tool = makeTerminalBashTool(mgr, {
 	},
 });
 
-// 从持久终端工具集中取 terminal_wait（解阻后重新阻塞等完成，无需轮询）
+// take terminal_wait from the persistent terminal tool set (re-block after unblock until done, no polling)
 const persistentTools = makePersistentTerminalTools(mgr, workdir);
 const waitTool = persistentTools.find((t) => t.name === "terminal_wait");
-check("terminal_wait 已注册", waitTool !== undefined);
+check("terminal_wait is registered", waitTool !== undefined);
 
 async function run(commandOrParams, timeout) {
 	const params =
@@ -76,35 +76,35 @@ async function run(commandOrParams, timeout) {
 }
 
 try {
-	// ---- 2. 阻塞语义：快速命令返回输出+退出码 ----
+	// ---- 2. blocking semantics: fast command returns output + exit code ----
 	{
 		const t0 = Date.now();
 		const { result, error } = await run("echo hello-tbash");
-		check("echo 正常完成无错误", !error);
+		check("echo completes with no error", !error);
 		const text = result?.content?.[0]?.text ?? "";
-		check("输出包含命令结果", text.includes("hello-tbash"), JSON.stringify(text));
-		check("退出码 0", /\[exit:0\]$/.test(text.trim()));
-		check("不含哨兵原文与回显标记", !text.includes("__pi_rc") && !text.includes("pi-exit"));
-		check("阻塞到命令真正结束", Date.now() - t0 >= 50);
+		check("output includes the command result", text.includes("hello-tbash"), JSON.stringify(text));
+		check("exit code 0", /\[exit:0\]$/.test(text.trim()));
+		check("does not contain sentinel text or echo markers", !text.includes("__pi_rc") && !text.includes("pi-exit"));
+		check("blocked until the command actually finished", Date.now() - t0 >= 50);
 	}
 	{
 		const { result } = await run("sh -c 'exit 3'");
-		check("非零退出码透传", /\[exit:3\]/.test(result?.content?.[0]?.text ?? ""));
+		check("non-zero exit code is passed through", /\[exit:3\]/.test(result?.content?.[0]?.text ?? ""));
 	}
 
-	// ---- 3. 多行脚本 ----
+	// ---- 3. multi-line script ----
 	{
 		const script = "for i in a b c\ndo\n echo item=$i\ndone";
 		const { result } = await run(script);
 		const text = result?.content?.[0]?.text ?? "";
 		check(
-			"多行脚本执行并收集全部输出",
+			"multi-line script runs and collects all output",
 			text.includes("item=a") && text.includes("item=b") && text.includes("item=c"),
 			JSON.stringify(text),
 		);
 	}
 
-	// ---- 3b. tail 参数：只返回末尾 N 行（替代 | tail 管道）----
+	// ---- 3b. tail param: return only the last N lines (replaces a | tail pipe)----
 	{
 		const { result } = await run({ command: "seq 1 30", tail: 5 });
 		const text = result?.content?.[0]?.text ?? "";
@@ -114,7 +114,7 @@ try {
 			.map((l) => l.trim())
 			.join(",");
 		check(
-			"tail:5 只保留末 5 行（26–30）",
+			"tail:5 keeps only the last 5 lines (26–30)",
 			numLines === "26,27,28,29,30",
 			JSON.stringify(text),
 		);
@@ -122,10 +122,10 @@ try {
 		const fullLines = (full.result?.content?.[0]?.text ?? "")
 			.split("\n")
 			.filter((l) => /^\d+$/.test(l.trim())).length;
-		check("不带 tail 时完整返回 30 行", fullLines === 30);
+		check("without tail, all 30 lines are returned", fullLines === 30);
 	}
 
-	// ---- 4. 静默解阻 + 完成通知 ----
+	// ---- 4. silent unblock + completion notice ----
 	{
 		idleMsOverride = 500;
 		bgDone = null;
@@ -133,26 +133,26 @@ try {
 		const { result } = await run("echo started-bg; sleep 1.5; echo finished-bg");
 		const elapsed = Date.now() - t0;
 		const text = result?.content?.[0]?.text ?? "";
-		check("静默解阻：提前返回不阻塞", elapsed < 1400, `${elapsed}ms`);
-		check("返回「仍在运行」说明", text.includes("仍在持久终端 ai-bash 中运行"));
-		check("返回已有部分输出", text.includes("started-bg"));
-		check("details 标记 running", result?.details?.running === true);
-		// 等后台命令真正结束 → notifyBackgroundDone
+		check("silent unblock: returns early without blocking", elapsed < 1400, `${elapsed}ms`);
+		check("returns still-running explanation", text.includes("still running in persistent terminal ai-bash"));
+		check("returns the partial output so far", text.includes("started-bg"));
+		check("details marks running", result?.details?.running === true);
+		// wait until the background command actually finishes → notifyBackgroundDone
 		for (let i = 0; i < 60 && !bgDone; i++) await sleep(100);
-		check("完成后主动回调通知", bgDone !== null);
+		check("completion callback fires", bgDone !== null);
 		if (bgDone) {
-			check("通知带正确退出码", bgDone.exitCode === 0);
-			check("通知带原命令", typeof bgDone.command === "string" && bgDone.command.includes("sleep"));
+			check("notice carries the correct exit code", bgDone.exitCode === 0);
+			check("notice carries the original command", typeof bgDone.command === "string" && bgDone.command.includes("sleep"));
 		}
 		idleMsOverride = 0;
-		await sleep(300); // 等 shell 提示符稳定
+		await sleep(300); // wait for the shell prompt to settle
 	}
 
-	// ---- 4b. terminal_wait：解阻后重新阻塞等完成，无需轮询 ----
+	// ---- 4b. terminal_wait: re-block after unblock until done, no polling ----
 	{
 		idleMsOverride = 500;
-		mgr.kill("ai-bash"); // 全新终端，排除上一用例残留
-		await run("echo w-start; sleep 2.5; echo w-end"); // 静默解阻返回
+		mgr.kill("ai-bash"); // fresh terminal, drop leftover from the previous case
+		await run("echo w-start; sleep 2.5; echo w-end"); // silent-unblock return
 		const t0 = Date.now();
 		let wr = null;
 		try {
@@ -161,62 +161,62 @@ try {
 			wr = { error: e };
 		}
 		const parsed = JSON.parse(wr?.content?.[0]?.text ?? "{}");
-		check("terminal_wait 阻塞到命令真正结束", parsed.finished === true && Date.now() - t0 >= 1200);
-		check("terminal_wait 拿到退出码 0", parsed.exitCode === 0);
-		check("terminal_wait 附带等待期间的输出", (parsed.outputTail ?? "").includes("w-end"));
-		// 显式 cursor=0：存量哨兵可命中（预扫描路径），应秒回不空等
+		check("terminal_wait blocks until the command actually finished", parsed.finished === true && Date.now() - t0 >= 1200);
+		check("terminal_wait got exit code 0", parsed.exitCode === 0);
+		check("terminal_wait includes output from the wait", (parsed.outputTail ?? "").includes("w-end"));
+		// explicit cursor=0: existing sentinel can match (pre-scan path); should return immediately, not idle-wait
 		const t2 = Date.now();
 		const wr2 = JSON.parse(
 			(await waitTool.execute("tw2", { terminalId: "ai-bash", cursor: 0, maxWaitMs: 3000 }))?.content?.[0]?.text ?? "{}",
 		);
-		check("存量哨兵预扫描立即返回", wr2.finished === true && Date.now() - t2 < 1500);
-		// 超时路径：等待一个不会结束的静默命令
+		check("pre-scan of an existing sentinel returns immediately", wr2.finished === true && Date.now() - t2 < 1500);
+		// timeout path: wait on a silent command that will not finish
 		await run("sleep 5");
 		const t1 = Date.now();
 		const wr3 = JSON.parse(
 			(await waitTool.execute("tw3", { terminalId: "ai-bash", maxWaitMs: 800 }))?.content?.[0]?.text ?? "{}",
 		);
-		check("超时返回 finished:false 且耗时≈阈值", wr3.finished === false && Date.now() - t1 >= 700 && Date.now() - t1 < 2500);
+		check("timeout returns finished:false and elapsed ≈ threshold", wr3.finished === false && Date.now() - t1 >= 700 && Date.now() - t1 < 2500);
 		idleMsOverride = 0;
-		await sleep(5500); // 让 sleep 5 跑完，避免污染后续用例
+		await sleep(5500); // let sleep 5 finish so it does not pollute later cases
 	}
 
-	// ---- 4c. 空闲终端调用 terminal_wait：立即返回说明，不挂起 ----
+	// ---- 4c. terminal_wait on an idle terminal: return immediately with an explanation, do not hang ----
 	{
 		idleMsOverride = 0;
 		mgr.kill("ai-bash");
-		await run("echo idle-probe"); // 正常完成 → 哨兵已消费，无待决命令
+		await run("echo idle-probe"); // completes normally → sentinel consumed, no pending command
 		const t3 = Date.now();
 		const wr4 = JSON.parse(
 			(await waitTool.execute("tw4", { terminalId: "ai-bash", maxWaitMs: 60000 }))?.content?.[0]?.text ?? "{}",
 		);
 		check(
-			"空闲终端 terminal_wait 秒回 applicable:false",
+			"idle-terminal terminal_wait returns immediately with applicable:false",
 			wr4.applicable === false && Date.now() - t3 < 1500,
 			JSON.stringify(wr4),
 		);
 	}
 
-	// ---- 5. shell 状态跨调用保留 ----
+	// ---- 5. shell state kept across calls ----
 	{
 		await run("cd subdir");
 		const { result } = await run("pwd");
-		check("cd 状态保留到下一次调用", (result?.content?.[0]?.text ?? "").includes("subdir"));
+		check("cd state is kept for the next call", (result?.content?.[0]?.text ?? "").includes("subdir"));
 		await run(`cd "${workdir}"`);
 	}
 
-	// ---- 6. abort_bash（阻塞期间中止）----
+	// ---- 6. abort_bash (abort while blocked)----
 	{
-		mgr.kill("ai-bash"); // 全新终端，确保没有残留前台进程
+		mgr.kill("ai-bash"); // fresh terminal, ensure no leftover foreground process
 		const kills = new Set();
 		const abortTool = makeTerminalBashTool(mgr, {
 			cwd: workdir,
-			idleMs: () => 0, // 永不解阻 → 只能靠 abort
+			idleMs: () => 0, // never unblock → abort is the only way out
 			kills,
 			notifyBackgroundDone: () => {},
 		});
 		const execPromise = abortTool.execute("t2", { command: "sleep 30" }, undefined);
-		await sleep(700); // 让命令先跑起来
+		await sleep(700); // let the command start first
 		for (const ac of [...kills]) ac.abort();
 		const t0 = Date.now();
 		let abortedErr = null;
@@ -225,9 +225,9 @@ try {
 		} catch (e) {
 			abortedErr = e;
 		}
-		check("abort 后快速返回", abortedErr !== null && Date.now() - t0 < 2000);
-		check("报 Command aborted", /aborted/i.test(abortedErr?.message ?? ""));
-		check("终端本身未被杀（会话保留）", mgr.read("ai-bash", 0, 1)?.running !== false);
+		check("returns quickly after abort", abortedErr !== null && Date.now() - t0 < 2000);
+		check("reports Command aborted", /aborted/i.test(abortedErr?.message ?? ""));
+		check("the terminal itself was not killed (session kept)", mgr.read("ai-bash", 0, 1)?.running !== false);
 	}
 } finally {
 	mgr.killAll();
@@ -235,4 +235,4 @@ try {
 	rmSync(workdir, { recursive: true, force: true });
 }
 
-console.log(`\n${passed} checks passed${process.exitCode ? "（有失败）" : ""}`);
+console.log(`\n${passed} checks passed${process.exitCode ? " (failures)" : ""}`);

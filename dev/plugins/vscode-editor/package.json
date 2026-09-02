@@ -2,7 +2,7 @@
 	"name": "vscode-editor-plugin",
 	"private": true,
 	"type": "module",
-	"description": "pi-web-ui 编辑器插件（类 VSCode + Remote-SSH；构建用 package.json，不发布。运行时依赖 ssh2 由插件服务端自动安装）",
+	"description": "pi-web-ui editor plugin (VS Code-like + Remote-SSH; build-only package.json, not published. Runtime ssh2 is auto-installed by the plugin server)",
 	"scripts": {
 		"build": "node build.mjs"
 	},

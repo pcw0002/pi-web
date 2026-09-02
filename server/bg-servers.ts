@@ -1,10 +1,13 @@
 /**
- * Background-server tracking — 从 agent-service.ts 抽出。
+ * Background-server tracking — extracted from agent-service.ts.
  *
- * bash 工具执行前后各拍一次监听端口快照，diff 出 AI 启动的后台服务记入列表；
- * 列表按客户端持久（对话切换/断线重连不消失），只有任务被停或进程自行退出才移除。
- * 本模块自包含：只依赖 process-utils 与协议类型，经回调与 ClientSession 解耦
- * （emit 推消息 / flushSnapshot 立即刷快照 / isDisposed 停止后台刷新）。
+ * Snapshot listening ports before and after each bash-tool run, then diff
+ * to record services the agent started. The list persists per client
+ * (survives conversation switches and reconnects) and is only removed when
+ * a task is stopped or the process exits on its own. This module is
+ * self-contained: it depends only on process-utils and protocol types, and
+ * decouples from ClientSession via callbacks (emit / flushSnapshot /
+ * isDisposed to stop background refresh).
  */
 import type { ServerMessage, BgServer } from "./protocol.js";
 import {
@@ -15,7 +18,7 @@ import {
 } from "./process-utils.js";
 
 const BG_REFRESH_INTERVAL_MS = 30_000;
-/** bash 结束后等这么久再拍「后」快照——给后台服务绑定端口的时间。 */
+/** How long to wait after bash finishes before the "after" snapshot — time for a background service to bind its port. */
 const BG_BIND_WAIT_MS = 1500;
 
 export class BgServerTracker {
@@ -23,7 +26,7 @@ export class BgServerTracker {
 		number,
 		{ pid: number; since: number; name?: string; command?: string }
 	>();
-	/** bash 工具开始执行前拍的监听端口快照（tool_execution_start 时设置）。 */
+	/** Listening-port snapshot taken before the bash tool starts (set at tool_execution_start). */
 	private listenBefore: Map<number, number> | null = null;
 	private refreshTimer: ReturnType<typeof setInterval> | null = null;
 
@@ -32,12 +35,12 @@ export class BgServerTracker {
 			emit: (msg: ServerMessage) => void;
 			flushSnapshot: () => void;
 			isDisposed: () => boolean;
-			/** 插件注册的常驻任务（host.registerBackgroundTask）→ 追加进同一列表。 */
+			/** Plugin-registered resident tasks (host.registerBackgroundTask) → appended to the same list. */
 			pluginTasks?: () => BgServer[];
 		},
 	) {}
 
-	/** 启动周期性存活检查（死项静默剔除）。 */
+	/** Start the periodic liveness check (dead entries are dropped silently). */
 	start(): void {
 		this.refreshTimer = setInterval(() => void this.refresh(), BG_REFRESH_INTERVAL_MS);
 		this.refreshTimer.unref?.();
@@ -50,7 +53,7 @@ export class BgServerTracker {
 		}
 	}
 
-	/** tool_execution_start(bash)：先记下「前」快照。 */
+	/** tool_execution_start(bash): record the "before" snapshot. */
 	snapshotBefore(): void {
 		void snapshotListeningPorts().then((m) => {
 			this.listenBefore = m;
@@ -90,14 +93,14 @@ export class BgServerTracker {
 				this.opts.emit({
 					type: "notice",
 					level: "info",
-					text: `检测到 AI 启动的后台服务：端口 ${port}（pid ${pid}）——可在顶栏「后台任务」里单独停止或全部关闭`,
+					text: `Detected an AI-started background server on port ${port} (pid ${pid}) — stop it from the top-bar Background tasks panel`,
 				});
 			}
 		}
 		if (added) this.push();
 	}
 
-	/** The current background-server list, oldest first. 合并插件任务。 */
+	/** The current background-server list, oldest first. Merges in plugin tasks. */
 	list(): BgServer[] {
 		const out: BgServer[] = [...this.servers.entries()]
 			.map(([port, v]) => ({
@@ -147,7 +150,7 @@ export class BgServerTracker {
 			this.opts.emit({
 				type: "notice",
 				level: "info",
-				text: `端口 ${port} 不在后台任务列表中`,
+				text: `Port ${port} is not in the background-task list`,
 			});
 			this.opts.flushSnapshot();
 			return false;
@@ -158,7 +161,7 @@ export class BgServerTracker {
 		this.opts.emit({
 			type: "notice",
 			level: "info",
-			text: `已停止后台任务：端口 ${port}（pid ${entry.pid}）`,
+			text: `Stopped background task: port ${port} (pid ${entry.pid})`,
 		});
 		this.opts.flushSnapshot();
 		return true;

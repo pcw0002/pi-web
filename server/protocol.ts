@@ -1,8 +1,40 @@
 /**
  * Wire protocol between the browser client and the pi-web-ui server.
- * Pure JSON over WebSocket. The web frontend mirrors these types in
- * web/src/types.ts (kept in sync by hand — types only, no shared runtime code).
+ * Pure JSON over WebSocket. `web/src/types.ts` re-exports these types
+ * (`export type *`); this file must stay type-only (no runtime code).
  */
+
+import type {
+	DiffResponse,
+	ReviewAnnotation,
+	ReviewComment,
+	ReviewIndexEntry,
+	SubmitReviewResponse,
+} from "./review/types.js";
+
+export type {
+	CommentScope,
+	CommentSide,
+	DiffFile,
+	DiffHunk,
+	DiffLine,
+	DiffMode,
+	DiffResponse,
+	ReviewAnnotation,
+	ReviewComment,
+	ReviewIndexEntry,
+	ReviewStatus,
+	SubmitReviewRequest,
+	SubmitReviewResponse,
+} from "./review/types.js";
+
+/** One navigable user turn in the current session tree (`/tree`). */
+export interface SessionTreeItem {
+	entryId: string;
+	text: string;
+	timestamp?: string;
+	current: boolean;
+}
 
 // ---------------------------------------------------------------------------
 // Serialized messages (server -> client snapshot)
@@ -107,8 +139,8 @@ export interface UiState {
 	 * change the level". Empty/absent → fall back to the full list.
 	 */
 	availableThinkingLevels: string[];
-	/** Queued prompt TEXTS per conversation. steering = 插队（当前回合结算后
-	 *  立即注入），followUp = 排队（整个 run 结束后才发送）。UI renders them
+	/** Queued prompt TEXTS per conversation. steering = cut in (injected as soon
+	 *  as the current turn settles), followUp = queued (sent only after the whole run finishes). UI renders them
 	 *  as pending user bubbles in the real message list. */
 	queue: { steering: string[]; followUp: string[] };
 	errorMessage?: string;
@@ -174,12 +206,10 @@ export interface SlashCommandInfo {
 	 *  names are suffixed by the SDK ("new:2"), like the CLI. */
 	name: string;
 	description?: string;
-	descriptionEn?: string;
-	/** Argument placeholder shown in the picker (e.g. "<路径>", "[说明]"). */
+	/** Argument placeholder shown in the picker (e.g. "<path>", "[instructions]"). */
 	argumentHint?: string;
-	argumentHintEn?: string;
 	/** Where the command comes from: web-native builtin / SDK extension /
-	 *  prompt template / skill / UI plugin（registerCommand）。 */
+	 *  prompt template / skill / UI plugin (registerCommand). */
 	source: "builtin" | "extension" | "prompt" | "skill" | "plugin";
 }
 
@@ -216,7 +246,7 @@ export interface PromptAttachment {
 	 */
 	uploadPath?: string;
 	mimeType?: string;
-	/** Display name for the attachment card (filename, or "粘贴图片.png"). */
+	/** Display name for the attachment card (filename, or "pasted-image.png"). */
 	name?: string;
 	/** Decoded byte size, for the card's size hint. */
 	size?: number;
@@ -233,7 +263,7 @@ export type ClientMessage =
 			 * While the agent is streaming: queue this prompt and deliver it after
 			 * the WHOLE run finishes (followUp) instead of steering (injecting it
 			 * right after the current turn settles, skipping remaining tool calls).
-			 * The 补充 (supplement) button sends queue=true; plain Enter keeps the
+			 * The supplement button sends queue=true; plain Enter keeps the
 			 * steer semantic.
 			 */
 			queue?: boolean;
@@ -293,6 +323,30 @@ export type ClientMessage =
 	| { type: "scm_filediff"; reqId: number; path: string }
 	/** Full patch of one commit. */
 	| { type: "scm_commit"; reqId: number; hash: string }
+	// -- Local Review (line comments on a parsed diff) --
+	| { type: "review_diff"; reqId: number; mode?: "working-tree" | "branch"; base?: string }
+	| {
+			type: "review_submit";
+			reqId: number;
+			mode?: "working-tree" | "branch";
+			baseBranch?: string;
+			comments: ReviewComment[];
+	  }
+	/** Inject pending Local Review comments into the current chat and run. */
+	| { type: "review_apply" }
+	/** Mark one pending review (or every pending review, if `id` is omitted)
+	 *  applied (work is done) or dismissed (won't apply). */
+	| { type: "review_set_status"; id?: string; status: "applied" | "dismissed" }
+	/** Re-push pending-review chip state for the current workspace. */
+	| { type: "review_pending" }
+	/** Dismiss the post-run "review these changes" nudge. Server is a no-op
+	 *  (nudge is client reducer state; a refresh already clears it). */
+	| { type: "review_nudge_ack" }
+	/** Name the current session (`/name` equivalent). */
+	| { type: "set_session_name"; name: string }
+	/** Session tree for `/tree` — user-message leaves you can jump to. */
+	| { type: "session_tree" }
+	| { type: "navigate_tree"; entryId: string }
 	| { type: "new_chat" }
 	/** Edit a past user question and re-ask it (forks a new session at that point). */
 	| {
@@ -415,10 +469,10 @@ export type ClientMessage =
 			 *  are removed from the active tool set and the built-in usage guidance
 			 *  disappears from the system prompt. */
 			terminalToolsEnabled?: boolean;
-			/** 终端接管 bash 开关 + 静默解阻阈值毫秒（0 = 一直等到命令结束）。 */
+			/** Terminal-backed bash toggle + silence-unblock threshold in ms (0 = wait until the command ends). */
 			terminalBash?: boolean;
 			terminalBashIdleMs?: number;
-			/** 思考文本是否换行（默认开）。纯 UI 偏好，不需要 reload runtime。 */
+			/** Whether thinking text wraps (default on). Pure UI preference; no runtime reload. */
 			thinkingWrap?: boolean;
 			/** Vision bridge on/off + preferred "provider/id" model (null = auto). */
 			visionBridgeEnabled?: boolean;
@@ -430,6 +484,9 @@ export type ClientMessage =
 			/** Extra instructions and independently disabled skills for review. */
 			reviewPrompt?: string;
 			reviewDisabledSkills?: string[];
+			/** Extra skill directories (one path per line in the UI), loaded in
+			 *  addition to ~/.pi/agent/skills and the well-known Claude/Cursor dirs. */
+			additionalSkillPaths?: string[];
 	  }
 	// -- plugins (<dataDir>/plugins) -----------------------------------------
 	/** App-level message from a plugin's client bundle to its server side.
@@ -481,7 +538,7 @@ export interface ProjectSummary {
 }
 
 /** A background server the agent left running (listening-port diff around a
- *  bash tool run). Keyed by port. Managed from the 后台任务 panel: each entry
+ *  bash tool run). Keyed by port. Managed from the background-tasks panel: each entry
  *  can be stopped individually or all at once, and the list persists even
  *  after the conversation that started them ends. */
 export interface BgServer {
@@ -501,7 +558,7 @@ export interface BgServer {
 	/** Best-effort full command line (PowerShell CIM / ps -o command=) so the
 	 *  panel can show WHAT is actually running, undefined when unknown. */
 	command?: string;
-	/** 插件任务的活动状态文案（如轮询间隔、连接数），可经 update 刷新。 */
+	/** Activity status text for a plugin task (e.g. poll interval, connection count); refreshable via update(). */
 	status?: string;
 }
 
@@ -582,7 +639,7 @@ export interface GoalStatus {
 	reviewing: boolean;
 	/** 1-based round counter for the current goal (review rounds). */
 	round: number;
-	/** Human-readable status line (e.g. "审查中", "已通过", "本轮不通过"). */
+	/** Human-readable status line (e.g. "Reviewing", "Passed", "Failed this round"). */
 	status: string;
 	/** Latest review verdict: "pending" | "pass" | "fail". */
 	verdict: "pending" | "pass" | "fail";
@@ -606,7 +663,7 @@ export interface WizardStatus {
 	step: number;
 	/** Max questions the wizard may ask before forcing a conclusion. */
 	maxSteps: number;
-	/** Short status line for the goal bar (e.g. "调研中：请回答第 2 题"). */
+	/** Short status line for the goal bar (e.g. "Scoping: please answer question 2"). */
 	status: string;
 }
 
@@ -648,22 +705,22 @@ export interface UiProviderConfig {
  *  bundled with the app — users install by dropping the directory in and
  *  restarting (or reconnecting: the list is re-scanned on every attach). */
 
-/** 一个声明式设置字段（manifest "settings" 数组里的元素）。 */
+/** One declarative settings field (an element of the manifest "settings" array). */
 export interface UiPluginSettingField {
-	/** 字段 key（storage.json settings 对象里的键；同一插件内唯一）。 */
+	/** Field key (key in the storage.json settings object; unique within the plugin). */
 	key: string;
-	/** 控件类型：文本 / 密码 / 数字 / 开关 / 下拉。 */
+	/** Control type: text / password / number / toggle / select. */
 	type: "text" | "password" | "number" | "boolean" | "select";
-	/** 表单里的显示名。 */
+	/** Display name in the form. */
 	label: string;
-	/** 未保存过时的默认值。 */
+	/** Default value when nothing has been saved yet. */
 	default?: string | number | boolean;
-	/** number 用：范围。 */
+	/** For number: range. */
 	min?: number;
 	max?: number;
-	/** select 用：候选值。 */
+	/** For select: candidate values. */
 	options?: string[];
-	/** 帮助文案（悬浮提示/小字）。 */
+	/** Help text (tooltip / small print). */
 	hint?: string;
 }
 
@@ -773,11 +830,11 @@ export interface UiSettingsState {
 	/** Persistent-terminal tools on/off (default on). Off → terminal_* tools are
 	 *  removed from the active set and the guidance prompt is not injected. */
 	terminalToolsEnabled: boolean;
-	/** 终端接管 bash（默认关）：bash 执行体改为持久终端（可见/保留状态/静默转后台）。 */
+	/** Terminal-backed bash (default off): bash runs in a persistent terminal (visible / keeps state / silence backgrounds it). */
 	terminalBash: boolean;
-	/** 接管模式下 bash 的静默解阻阈值毫秒数（0 = 一直等到命令结束）。 */
+	/** Silence-unblock threshold in ms for terminal-backed bash (0 = wait until the command ends). */
 	terminalBashIdleMs: number;
-	/** 思考文本是否换行（默认开 = pre-wrap；关 = 长行横向滚动）。 */
+	/** Whether thinking text wraps (default on = pre-wrap; off = long lines scroll horizontally). */
 	thinkingWrap: boolean;
 	/** Vision bridge on/off (default on). Off → images are sent as-is. */
 	visionBridgeEnabled: boolean;
@@ -792,6 +849,8 @@ export interface UiSettingsState {
 	reviewPrompt: string;
 	/** Skills disabled only for the isolated goal-reviewer. */
 	reviewDisabledSkills: string[];
+	/** Extra skill directories beyond auto-detected Claude/Cursor/pi dirs. */
+	additionalSkillPaths: string[];
 	/** Installed UI plugins the user hid in the settings panel (UI-only:
 	 *  hidden tabs/views; server-side handlers stay reachable). */
 	disabledPlugins: string[];
@@ -1014,7 +1073,29 @@ export type ServerMessage =
 			untracked?: boolean;
 			/** commit payload */
 			text?: string;
-  }
+	  }
+	| {
+			type: "review_data";
+			reqId: number;
+			kind: "diff" | "submit";
+			ok: boolean;
+			error?: string;
+			diff?: DiffResponse;
+			submitted?: SubmitReviewResponse;
+			/** Submitted comments (pending + applied) to overlay on the current diff. */
+			annotations?: ReviewAnnotation[];
+	  }
+	| {
+			type: "review_status";
+			pending: ReviewIndexEntry[];
+			commentCount: number;
+	  }
+	| { type: "review_nudge" }
+	| {
+			type: "session_tree_data";
+			leafId: string | null;
+			items: SessionTreeItem[];
+	  }
 	| {
 			type: "path_completions";
 			completions: { name: string; path: string; type: "dir" | "file" }[];

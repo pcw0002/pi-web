@@ -15,7 +15,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
-// fileURLToPath: URL.pathname 在 Windows 下是 /E:/... 形式，直接当 cwd 会失败
+// fileURLToPath: URL.pathname on Windows is /E:/...; using it as cwd directly fails
 const REPO_ROOT = fileURLToPath(new globalThis.URL("../", import.meta.url));
 
 /* eslint-env node */
@@ -69,11 +69,11 @@ function mkWaiters() {
 	ws.send(JSON.stringify({ type: "hello", clientId: "abort-test" }));
 	try { await next((m) => m.type === "snapshot", "snap", 20000); } catch {}
 
-	ws.send(JSON.stringify({ type: "set_goal", goal: "写一段超过500字的说明，字越多越好。", maxRounds: 0, locked: true }));
+	ws.send(JSON.stringify({ type: "set_goal", goal: "Write a 500+ word explanation, the longer the better.", maxRounds: 0, locked: true }));
 	try { await next((m) => m.type === "goal_status" && m.status.goal, "goal set", 10000); } catch {}
 
 	// Start generation then abort shortly after (if model streams at all).
-	ws.send(JSON.stringify({ type: "prompt", text: "请开始。" }));
+	ws.send(JSON.stringify({ type: "prompt", text: "Please start." }));
 	await sleep(4000);
 	ws.send(JSON.stringify({ type: "abort" }));
 
@@ -83,7 +83,7 @@ function mkWaiters() {
 	// Wait for the abort-clear goal_status (goal === null with our marker).
 	try {
 		await next(
-			(m) => m.type === "goal_status" && m.status.goal === null && m.status.status.includes("手动停止"),
+			(m) => m.type === "goal_status" && m.status.goal === null && m.status.status.includes("Stopped manually"),
 			"abort-cleared goal_status",
 			15000,
 		);

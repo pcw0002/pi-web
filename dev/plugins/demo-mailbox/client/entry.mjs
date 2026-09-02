@@ -1,9 +1,9 @@
 /**
- * demo-mailbox 客户端视图 —— 插件协议示例。
+ * demo-mailbox client view — plugin protocol sample.
  *
- * 约定：ESM 默认导出 { mount(container, ctx) → cleanup? }。
- * ctx.send(payload) 上行 plugin_message；ctx.onData(cb) 订阅 plugin_data。
- * 不依赖 React —— 纯 DOM 即可，也可以打包任意框架（自带实例，与主应用隔离）。
+ * Convention: ESM default export { mount(container, ctx) → cleanup? }.
+ * ctx.send(payload) sends plugin_message; ctx.onData(cb) subscribes to plugin_data.
+ * No React — plain DOM is enough; you can also bundle any framework (own instance, isolated from the host).
  */
 
 let uid = 0;
@@ -36,14 +36,14 @@ export default {
 			border-radius: 6px; padding: 6px 14px; cursor: pointer; font: inherit;
 		}
 	</style>
-	<h2>📬 邮箱 <small style="opacity:.5;font-weight:normal">插件视图示例</small></h2>
-	<p class="hint">来自 &lt;dataDir&gt;/plugins/demo-mailbox/ — 删除该目录并刷新即卸载。</p>
+	<h2>📬 Mailbox <small style="opacity:.5;font-weight:normal">plugin view sample</small></h2>
+	<p class="hint">From &lt;dataDir&gt;/plugins/demo-mailbox/ — delete that directory and refresh to uninstall.</p>
 	<ul></ul>
 	<form>
-		<input name="to" placeholder="收件人" required />
-		<input name="subject" placeholder="主题" />
-		<button type="submit">发送</button>
-		<textarea name="body" rows="3" placeholder="正文…" style="grid-column:1/-1"></textarea>
+		<input name="to" placeholder="To" required />
+		<input name="subject" placeholder="Subject" />
+		<button type="submit">Send</button>
+		<textarea name="body" rows="3" placeholder="Body…" style="grid-column:1/-1"></textarea>
 	</form>
 </div>`;
 
@@ -57,7 +57,7 @@ export default {
 					(m) => `
 <li>
 	<div class="meta">
-		<b>${esc(m.outgoing ? `发往 ${m.to}` : m.from)}</b>
+		<b>${esc(m.outgoing ? `To ${m.to}` : m.from)}</b>
 		<span>${esc(new Date(m.date).toLocaleString())}</span>
 	</div>
 	<div><b>${esc(m.subject)}</b></div>
@@ -82,7 +82,7 @@ export default {
 		const off = ctx.onData((payload) => {
 			if (payload && Array.isArray(payload.mails)) render(payload.mails);
 		});
-		ctx.send({ action: "list" }); // 拉初始列表
+		ctx.send({ action: "list" }); // fetch initial list
 
 		return () => {
 			off();

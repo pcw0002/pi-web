@@ -13,7 +13,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
-// fileURLToPath: URL.pathname 在 Windows 下是 /E:/... 形式，直接当 cwd 会失败
+// fileURLToPath: URL.pathname on Windows is /E:/...; using it as cwd directly fails
 const REPO_ROOT = fileURLToPath(new globalThis.URL("../", import.meta.url));
 
 /* eslint-env node */
@@ -91,9 +91,9 @@ async function main() {
 	await next((m) => m.type === "snapshot", "initial snapshot", 20000);
 
 	// Locked, unlimited (maxRounds=0).
-	ws.send(JSON.stringify({ type: "set_goal", goal: "用一行 markdown 表格列出三个数 1 2 3 的平方", maxRounds: 0, locked: true }));
+	ws.send(JSON.stringify({ type: "set_goal", goal: "List the squares of 1 2 3 in a one-line markdown table", maxRounds: 0, locked: true }));
 	await next((m) => m.type === "goal_status" && m.status.goal, "goal set", 10000);
-	ws.send(JSON.stringify({ type: "prompt", text: "请完成：用 markdown 表格列出 1,2,3 的平方。" }));
+	ws.send(JSON.stringify({ type: "prompt", text: "Please finish: list the squares of 1,2,3 in a markdown table." }));
 
 	// Watch for a review (reviewing=true) OR a review result card.
 	let sawReviewing = false;
@@ -118,7 +118,7 @@ async function main() {
 			);
 			if (rev) { sawVerdict = true; break; }
 			// A revision-steer user message appears → review failed and loop continues.
-			if (msg.state.messages.some((m) => m.role === "user" && (m.content?.[0]?.text ?? "").includes("目标审查"))) {
+			if (msg.state.messages.some((m) => m.role === "user" && (m.content?.[0]?.text ?? "").includes("Goal review"))) {
 				sawRevision = true;
 			}
 		}

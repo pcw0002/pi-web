@@ -1,0 +1,13 @@
+{
+	"name": "@local-review/ui",
+	"version": "0.0.0",
+	"private": true,
+	"type": "module",
+	"description": "GitHub-style diff comment view. Host supplies ReviewSession + copy.",
+	"exports": {
+		".": "./src/index.ts"
+	},
+	"peerDependencies": {
+		"react": "^18.0.0"
+	}
+}

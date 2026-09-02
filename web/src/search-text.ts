@@ -1,16 +1,20 @@
 /**
- * 会话内搜索 —— 纯函数索引与命中计数（无 React 依赖，可单测）。
+ * In-conversation search — pure-function index and hit counts (no React,
+ * unit-testable).
  *
- * 每条消息折叠成一段可搜索文本（text / thinking / toolCall 名称+参数 /
- * bash 命令+输出），命中按「消息 × 出现次数」展开为扁平 hit 列表，
- * 供搜索栏计数与 prev/next 导航。toolResult 消息不进索引：
- * 它在 UI 里渲染为 null（内容并入对应 toolCall 卡片），没有可跳转的 DOM 节点。
+ * Each message is flattened into searchable text (text / thinking /
+ * toolCall name+args / bash command+output). Hits expand to a flat list of
+ * "message × occurrence" entries for the search bar's count and prev/next
+ * navigation. toolResult messages are not indexed: they render as null in
+ * the UI (content lives on the matching toolCall card), so there is no
+ * jumpable DOM node.
  */
 
 /**
- * 结构化类型镜像（同 message-delta.ts / skill-block.ts 模式）：
- * 本文件被 tsconfig.tests.json（NodeNext 解析）单测，同时被 Vite 打包，
- * 必须零依赖 —— 不能 import ./types（其内部无扩展名引用 protocol.ts）。
+ * Structural type mirror (same pattern as message-delta.ts / skill-block.ts):
+ * this file is unit-tested under tsconfig.tests.json (NodeNext resolution)
+ * and also bundled by Vite, so it must be zero-dependency — cannot import
+ * ./types (that shim references protocol.ts without an extension).
  */
 interface SearchTextBlock {
 	type: string;
@@ -31,7 +35,7 @@ export interface SearchMessage {
 
 /** Extract the searchable text of one message. */
 export function messageSearchText(m: SearchMessage): string {
-	// toolResult 单独渲染为空（内容由 toolCall 卡片展示）——跳转目标不存在。
+	// toolResult renders as empty on its own (content lives on the toolCall card) — no jump target.
 	if (m.role === "toolResult") return "";
 	const parts: string[] = [];
 	for (const b of m.content) {

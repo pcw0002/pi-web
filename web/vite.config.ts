@@ -17,8 +17,9 @@ export default defineConfig({
 		emptyOutDir: true,
 		rollupOptions: {
 			output: {
-				// 手动分包：大体积第三方库拆出主 chunk，利于浏览器缓存——
-				// 业务代码变动时不让用户重新下载 xterm / markdown 渲染器
+				// Manual splits: pull large third-party libs out of the main
+				// chunk so browser cache survives app-code changes (users
+				// don't re-download xterm / the markdown renderer).
 				manualChunks: {
 					react: ["react", "react-dom"],
 					markdown: ["react-markdown", "remark-gfm", "rehype-highlight", "highlight.js"],

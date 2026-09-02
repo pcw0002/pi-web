@@ -1,10 +1,11 @@
 /**
- * client-state — 每浏览器客户端的持久化 UI 状态（<dataDir>/client-state.json）：
- * 最近项目/工作目录、目标审查偏好、设置面板状态（提示词模式 + 技能/插件开关 +
- * 视觉桥偏好）、命名预设。文件 I/O 一律 best-effort：持久化故障绝不能
- * 弄崩 server 或阻塞会话。
+ * client-state — per-browser-client persistent UI state
+ * (<dataDir>/client-state.json): recent projects / working directory, goal-
+ * review prefs, settings-panel state (prompt mode + skill/plugin toggles +
+ * vision-bridge prefs), named presets. File I/O is always best-effort: a
+ * persistence failure must never crash the server or block a session.
  *
- * 从 agent-service.ts 抽出，行为保持不变。
+ * Extracted from agent-service.ts with behavior unchanged.
  */
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
@@ -22,10 +23,13 @@ export interface ClientSettings {
 	/** Persistent-terminal tools on/off (default on). Off → terminal_* tools are
 	 *  removed from the agent's active tool set and no usage guidance is injected. */
 	terminalToolsEnabled: boolean;
-	/** 终端接管 bash（默认关）。开 → bash 工具的执行体改为持久终端：命令在可见
-	 *  PTY 里跑、跨调用保留 shell 状态（cd/venv/ssh），静默超阈值自动转后台。 */
+	/** Terminal-backed bash (default off). On → the bash tool runs inside a
+	 *  persistent terminal: commands execute in a visible PTY, shell state
+	 *  (cd/venv/ssh) is kept across calls, and silence past the threshold
+	 *  automatically backgrounds the command. */
 	terminalBash: boolean;
-	/** 接管模式下 bash 的静默解阻阈值（毫秒，默认 15000；0 = 一直等到结束）。 */
+	/** Silence-unblock threshold in terminal-backed mode (ms, default 15000;
+	 *  0 = wait until the command finishes). */
 	terminalBashIdleMs: number;
 	/** Vision bridge on/off (default on). Off → images are sent as-is. */
 	visionBridgeEnabled: boolean;
@@ -40,12 +44,15 @@ export interface ClientSettings {
 	reviewPrompt: string;
 	/** Skills disabled only for the isolated goal-reviewer. */
 	reviewDisabledSkills: string[];
+	/** Extra skill directories beyond auto-detected Claude/Cursor/pi dirs. */
+	additionalSkillPaths: string[];
 	/** Installed UI plugins hidden in the settings panel (UI-only toggle).
 	 *  Optional: presets deliberately do NOT capture it (same as the
 	 *  vision-bridge prefs) — applying a preset keeps the current toggles. */
 	disabledPlugins?: string[];
-	/** 思考块默认折叠与否（默认关 = 折叠；开 = 始终完整展开并自动换行，流式推理
-	 *  也实时可见）。纯 UI 偏好，与视觉桥 / disabledPlugins 一样不进预设。 */
+	/** Whether thinking text wraps (default off = collapsed; on = always fully
+	 *  expanded with wrap, streaming reasoning visible in real time). Pure UI
+	 *  preference — like vision-bridge / disabledPlugins, not captured by presets. */
 	thinkingWrap: boolean;
 }
 
@@ -60,6 +67,7 @@ export interface SettingsPreset
 		| "visionBridgePromptMode"
 		| "visionBridgePrompt"
 		| "thinkingWrap"
+		| "additionalSkillPaths"
 	> {
 	name: string;
 }
@@ -120,7 +128,7 @@ export interface ClientState {
 	/** Workspaces this client opened before, most recent first (capped at 30). */
 	projects: { path: string; lastUsed: number }[];
 	/** Last-used goal / review preferences (model choice, max rounds, locked) so
-	 *  they survive a reload — "全局记忆". maxRounds: 0 means unlimited. The model
+	 *  they survive a reload — "global memory". maxRounds: 0 means unlimited. The model
 	 *  choice is shared by both the goal-reviewer and the goal-wizard. */
 	goalPrefs?: {
 		reviewModel: string | null;
@@ -290,6 +298,7 @@ export class ClientStateStore {
 			visionBridgePrompt: s?.settings?.visionBridgePrompt ?? "",
 			reviewPrompt: s?.settings?.reviewPrompt ?? "",
 			reviewDisabledSkills: s?.settings?.reviewDisabledSkills ?? [],
+			additionalSkillPaths: s?.settings?.additionalSkillPaths ?? [],
 			disabledPlugins: s?.settings?.disabledPlugins ?? [],
 		};
 	}
@@ -323,6 +332,8 @@ export class ClientStateStore {
 			reviewPrompt: settings.reviewPrompt ?? cur.reviewPrompt ?? "",
 			reviewDisabledSkills:
 				settings.reviewDisabledSkills ?? cur.reviewDisabledSkills ?? [],
+			additionalSkillPaths:
+				settings.additionalSkillPaths ?? cur.additionalSkillPaths ?? [],
 			disabledPlugins: settings.disabledPlugins ?? cur.disabledPlugins ?? [],
 		};
 		this.save();

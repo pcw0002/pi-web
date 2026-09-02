@@ -19,7 +19,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
-// fileURLToPath: URL.pathname 在 Windows 下是 /E:/... 形式，直接当 cwd 会失败
+// fileURLToPath: URL.pathname on Windows is /E:/...; using it as cwd directly fails
 const REPO_ROOT = fileURLToPath(new globalThis.URL("../", import.meta.url));
 
 const PORT = 8943;
@@ -95,11 +95,11 @@ try {
 		Array.isArray(full1?.state?.messages) && typeof full1?.state?.rev === "number",
 	);
 	// --- 2) non-forced emission → snapshot_delta ---------------------------
-	// /model（无参数）是原生斜杠命令：纯配置、零 token。prompt() 执行后
-	// flushSnapshot() 非强制 → 应产生增量快照（appended 可能为空，仅轻字段）。
-	// 不清空 stream：自动调度的快照可能随时插入，硬编码绝对 baseRev 会与
-	// 插入消息竞态。改为相对链断言：delta 的 baseRev 必须等于流中它前面
-	// 最近一条消息的 rev（全局连续性由第 3 步覆盖）。
+	// /model (no args) is a native slash command: config-only, zero token. After prompt()
+	// flushSnapshot() is not forced → should produce a delta snapshot (appended may be empty, light fields only).
+	// do not drain the stream: auto-scheduled snapshots can insert at any time; a hard-coded absolute baseRev races
+	// with inserted messages. Assert a relative chain instead: the delta's baseRev must equal the rev of the
+	// previous message in the stream (global continuity is covered in step 3).
 	const idxBeforePrompt = stream.length;
 	let lastRev = stream.length > 0 ? lastRevOf(stream[stream.length - 1]) : 1;
 	ws.send(JSON.stringify({ type: "prompt", text: "/model" }));
@@ -123,8 +123,8 @@ try {
 	}
 
 	// --- 3) rev chain continuity across the WHOLE recorded stream ----------
-	// 从第一条消息起：每个 delta 的 baseRev 必须等于上一条消息之后的 rev；
-	// full snapshot 重置基准。中途 get_state 强制全量也必须推进 rev。
+	// from the first message: each delta's baseRev must equal the rev after the previous message;
+	// a full snapshot resets the baseline. A mid-stream get_state forced-full must also advance rev.
 	let prevRev = null;
 	let chainOk = true;
 	let sawFullAfterDelta = false;

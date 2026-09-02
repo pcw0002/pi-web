@@ -4,7 +4,7 @@
 // a fixed transcript; the main model returns a canned answer.
 //
 // Verifies the full flow for a text-only main model (deepseek-style):
-//   1. prompt with imageData → server notices "正在用视觉桥转写"
+//   1. prompt with imageData → server notices "transcribing with vision bridge"
 //   2. mock vision API receives the image content
 //   3. the attachment card message carries mode "bridged" + <vision-bridge>
 //      transcript text (what the main model actually sees)
@@ -35,8 +35,8 @@ const IMG_B64 =
 // A real PNG file in the workspace — for the file-list (path reference) flow.
 writeFileSync(join(workdir, "screenshot.png"), Buffer.from(IMG_B64, "base64"));
 
-const TRANSCRIPT = "图 1：测试图片，内容为红色 1x1 像素。无文字。" + " ".repeat(50);
-const MAIN_REPLY = "我看到了：图 1 是一张纯色测试图。";
+const TRANSCRIPT = "Image 1: test picture, a red 1x1 pixel. No text." + " ".repeat(50);
+const MAIN_REPLY = "I see: image 1 is a solid-color test picture.";
 
 // ---------------------------------------------------------------------------
 // Mock OpenAI-compatible API — serves both the main (text-only) model and the
@@ -329,7 +329,7 @@ try {
 	// Send one prompt with a pasted image.
 	c.send({
 		type: "prompt",
-		text: "这张图里有什么？",
+		text: "What is in this picture?",
 		attachments: [
 			{
 				path: "",
@@ -346,7 +346,7 @@ try {
 	const startNotice = await c.waitFor(
 		"notice",
 		15000,
-		(m) => m.text && m.text.includes("正在用视觉桥"),
+		(m) => m.text && m.text.includes("vision bridge"),
 	);
 	check("transcribe-start notice", startNotice.level === "info");
 
@@ -356,7 +356,7 @@ try {
 		25000,
 		(m) =>
 			m.text &&
-			(m.text.includes("转写完成") || m.text.includes("转写失败")),
+			(m.text.includes("Vision bridge finished") || m.text.includes("Vision bridge failed")),
 	);
 	check(
 		"transcribe-done notice",
@@ -370,7 +370,7 @@ try {
 	);
 	check(
 		"vision prompt asks for transcription",
-		/转写/.test(visionRequests[0]?.textPrompt ?? ""),
+		/Transcribe/.test(visionRequests[0]?.textPrompt ?? ""),
 	);
 
 	// 3) bridged attachment card in the message list
@@ -404,7 +404,7 @@ try {
 	const before = visionRequestCount;
 	c.send({
 		type: "prompt",
-		text: "再看一遍这张图",
+		text: "Look at this picture again",
 		attachments: [
 			{
 				path: "",
@@ -419,7 +419,7 @@ try {
 	await c.waitFor(
 		"notice",
 		20000,
-		(m) => m.text && m.text.includes("再看一遍"),
+		(m) => m.text && m.text.includes("Look at this picture again"),
 	).catch(() => {});
 	await sleep(4000);
 	check(
@@ -464,7 +464,7 @@ try {
 	// A DIFFERENT image (different name -> different batch hash -> no cache hit)
 	c.send({
 		type: "prompt",
-		text: "用指定模型看这张图",
+		text: "Look at this picture with the specified model",
 		attachments: [
 			{
 				path: "",
@@ -479,7 +479,7 @@ try {
 	await c.waitFor(
 		"notice",
 		25000,
-		(m) => m.text && m.text.includes("转写完成"),
+		(m) => m.text && m.text.includes("Vision bridge finished"),
 	);
 	check(
 		"preferred model from settings is used",
@@ -497,7 +497,7 @@ try {
 	const before3 = visionRequestCount;
 	c.send({
 		type: "prompt",
-		text: "关掉视觉桥看图",
+		text: "Look at the picture with vision bridge off",
 		attachments: [
 			{
 				path: "",
@@ -512,7 +512,7 @@ try {
 	const offNotice = await c.waitFor(
 		"notice",
 		15000,
-		(m) => m.text && m.text.includes("视觉桥已在设置中关闭"),
+		(m) => m.text && m.text.includes("vision bridge is disabled"),
 	);
 	check(
 		"disabled bridge warns and skips transcription",
@@ -532,7 +532,7 @@ try {
 	const beforePath = visionRequestCount;
 	c.send({
 		type: "prompt",
-		text: "文件列表里的图片是什么？",
+		text: "What is the picture in the file list?",
 		attachments: [
 			{
 				path: "screenshot.png",
@@ -544,7 +544,7 @@ try {
 	const pathDone = await c.waitFor(
 		"notice",
 		25000,
-		(m) => m.text && m.text.includes("转写完成"),
+		(m) => m.text && m.text.includes("Vision bridge finished"),
 	);
 	check(
 		"path-referenced image triggers the vision bridge",
@@ -576,19 +576,19 @@ try {
 	c.send({
 		type: "set_settings",
 		visionBridgePromptMode: "append",
-		visionBridgePrompt: "【自定义：请额外输出图片主色调】",
+		visionBridgePrompt: "[custom: also output the image dominant color]",
 	});
 	await c.waitFor(
 		"settings_state",
 		10000,
 		(m) =>
 			m.settings?.visionBridgePromptMode === "append" &&
-			m.settings?.visionBridgePrompt === "【自定义：请额外输出图片主色调】",
+			m.settings?.visionBridgePrompt === "[custom: also output the image dominant color]",
 	);
 	const before4 = visionRequestCount;
 	c.send({
 		type: "prompt",
-		text: "用追加提示词看图",
+		text: "Look at the picture with an appended prompt",
 		attachments: [
 			{
 				path: "",
@@ -603,7 +603,7 @@ try {
 	await c.waitFor(
 		"notice",
 		25000,
-		(m) => m.text && m.text.includes("转写完成"),
+		(m) => m.text && m.text.includes("Vision bridge finished"),
 	);
 	const appendReq = visionRequests.at(-1);
 	check(
@@ -611,13 +611,13 @@ try {
 		visionRequestCount === before4 + 1 &&
 			typeof appendReq?.systemPrompt === "string" &&
 			appendReq.systemPrompt.includes(DEFAULT_PROMPT_MARKER) &&
-			appendReq.systemPrompt.includes("【自定义：请额外输出图片主色调】"),
+			appendReq.systemPrompt.includes("[custom: also output the image dominant color]"),
 	);
 
 	c.send({
 		type: "set_settings",
 		visionBridgePromptMode: "replace",
-		visionBridgePrompt: "完全自定义的转写提示词，只输出表格数据。",
+		visionBridgePrompt: "Fully custom transcription prompt, output table data only.",
 	});
 	await c.waitFor(
 		"settings_state",
@@ -627,7 +627,7 @@ try {
 	const before5 = visionRequestCount;
 	c.send({
 		type: "prompt",
-		text: "用替换提示词看图",
+		text: "Look at the picture with a replacement prompt",
 		attachments: [
 			{
 				path: "",
@@ -642,14 +642,14 @@ try {
 	await c.waitFor(
 		"notice",
 		25000,
-		(m) => m.text && m.text.includes("转写完成"),
+		(m) => m.text && m.text.includes("Vision bridge finished"),
 	);
 	const replaceReq = visionRequests.at(-1);
 	check(
 		"replace mode: built-in prompt fully replaced by custom text",
 		visionRequestCount === before5 + 1 &&
 			typeof replaceReq?.systemPrompt === "string" &&
-			replaceReq.systemPrompt.includes("完全自定义的转写提示词") &&
+			replaceReq.systemPrompt.includes("Fully custom transcription prompt") &&
 			!replaceReq.systemPrompt.includes(DEFAULT_PROMPT_MARKER),
 	);
 
@@ -659,7 +659,7 @@ try {
 	const before6 = visionRequestCount;
 	c.send({
 		type: "prompt",
-		text: "再看一遍（提示词已改，不应命中缓存）",
+		text: "Look again (prompt changed, must not hit cache)",
 		attachments: [
 			{
 				path: "",
@@ -674,7 +674,7 @@ try {
 	await c.waitFor(
 		"notice",
 		25000,
-		(m) => m.text && m.text.includes("转写完成"),
+		(m) => m.text && m.text.includes("Vision bridge finished"),
 	);
 	check(
 		"custom prompt change invalidates the transcript cache",

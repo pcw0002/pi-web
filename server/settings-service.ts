@@ -1,10 +1,12 @@
 /**
- * Settings service — 从 agent-service.ts 抽出（系统提示词 / 技能插件开关 /
- * 目标审查提示词 / 预设 / 视觉桥偏好）。设置持久化在 client-state.json 按客户端隔离。
+ * Settings service — extracted from agent-service.ts (system prompt / skill & plugin
+ * toggles / goal-review prompt / presets / vision-bridge prefs). Settings persist
+ * in client-state.json, isolated per client.
  *
- * 经 SettingsHost 回调与 ClientSession 解耦：本模块只管「设置状态 + 面板推送 +
- * 预设存取 + 何时需要 reload」，真正动 runtime 的 session.reload() 走宿主回调
- * （reloadSession 里还会刷新斜杠命令目录）。
+ * Decoupled from ClientSession via SettingsHost callbacks: this module owns
+ * "settings state + panel push + preset CRUD + when a reload is needed".
+ * The actual runtime session.reload() goes through the host callback
+ * (reloadSession also refreshes the slash-command catalog).
  */
 import { basename } from "node:path";
 import type { AgentSession } from "@earendil-works/pi-coding-agent";
@@ -12,20 +14,20 @@ import type { ServerMessage, UiExtensionInfo, UiSettingsState, UiSkillInfo, UiVi
 import { extensionKey, type ClientStateStore, type ClientSettings, type PromptMode } from "./client-state.js";
 import { findVisionModels, SYSTEM_PROMPT } from "./vision-bridge.js";
 
-/** ClientSession 提供给本服务的宿主能力（窄接口，便于独立测试）。 */
+/** Host capabilities ClientSession provides to this service (narrow interface, easy to unit-test). */
 export interface SettingsHost {
 	clientId: string;
 	stateStore: ClientStateStore;
 	emit: (msg: ServerMessage) => void;
 	flushSnapshot: () => void;
 	isDisposed: () => boolean;
-	/** 当前活动对话的 session（未就绪时调用方自行 try/catch）。 */
+	/** Session of the currently active conversation (caller try/catches if not ready). */
 	getSession: () => AgentSession;
 	isStreaming: () => boolean;
-	/** session.reload() + 刷新斜杠命令目录。 */
+	/** session.reload() + refresh the slash-command catalog. */
 	reloadSession: () => Promise<void>;
 	effectiveDefaultSystemPrompt: () => string;
-	/** 当前会话实际生效的完整系统提示词（只读查看用；未就绪时返回空串）。 */
+	/** Full system prompt currently in effect for the session (read-only; empty string if not ready). */
 	effectiveSystemPrompt: () => string;
 }
 
@@ -34,7 +36,7 @@ export class SettingsService {
 	private presets: SettingsPreset[];
 	private knownSkills = new Map<string, UiSkillInfo>();
 	private knownExtensions = new Map<string, UiExtensionInfo>();
-	/** 流式中改了需要 reload 的设置 → agent_end 后延迟应用（防拆毁运行中 run）。 */
+	/** Settings that need a reload were changed mid-stream → apply after agent_end (do not tear down a running run). */
 	private pendingReload = false;
 
 	constructor(private readonly host: SettingsHost) {
@@ -133,6 +135,7 @@ export class SettingsService {
 				visionBridgePrompt: this.settings.visionBridgePrompt,
 				reviewPrompt: this.settings.reviewPrompt,
 				reviewDisabledSkills: [...this.settings.reviewDisabledSkills],
+				additionalSkillPaths: [...(this.settings.additionalSkillPaths ?? [])],
 				disabledPlugins: [...(this.settings.disabledPlugins ?? [])],
 				// The built-in prompts, so the replace-mode editors can prefill the
 				// text they would otherwise replace (empty until the resource-loader
@@ -182,13 +185,15 @@ export class SettingsService {
 		reviewPrompt?: string;
 		reviewDisabledSkills?: string[];
 		disabledPlugins?: string[];
+		additionalSkillPaths?: string[];
 	}): Promise<void> {
 		const needsReload =
 			partial.promptMode !== undefined ||
 			partial.customSystemPrompt !== undefined ||
 			partial.disabledSkills !== undefined ||
 			partial.disabledExtensions !== undefined ||
-			partial.terminalToolsEnabled !== undefined;
+			partial.terminalToolsEnabled !== undefined ||
+			partial.additionalSkillPaths !== undefined;
 		if (partial.promptMode !== undefined) this.settings.promptMode = partial.promptMode;
 		if (partial.customSystemPrompt !== undefined) {
 			this.settings.customSystemPrompt = partial.customSystemPrompt;
@@ -199,7 +204,7 @@ export class SettingsService {
 		if (partial.disabledExtensions !== undefined) {
 			this.settings.disabledExtensions = partial.disabledExtensions;
 		}
-		// 插件开关是纯 UI 隐藏（不进 needsReload——运行时无需重载）。
+		// Plugin toggles are UI-only hide (not in needsReload — no runtime reload).
 		if (partial.disabledPlugins !== undefined) {
 			this.settings.disabledPlugins = partial.disabledPlugins;
 		}
@@ -236,6 +241,11 @@ export class SettingsService {
 		if (partial.reviewDisabledSkills !== undefined) {
 			this.settings.reviewDisabledSkills = partial.reviewDisabledSkills;
 		}
+		if (partial.additionalSkillPaths !== undefined) {
+			this.settings.additionalSkillPaths = partial.additionalSkillPaths
+				.map((p) => p.trim())
+				.filter(Boolean);
+		}
 		this.host.stateStore.saveSettings(this.host.clientId, this.settings);
 		this.push();
 		if (needsReload) await this.applyRuntime();
@@ -245,7 +255,7 @@ export class SettingsService {
 	async savePreset(name: string): Promise<void> {
 		const n = name.trim();
 		if (!n) {
-			this.host.emit({ type: "notice", level: "error", text: "预设名称不能为空" });
+			this.host.emit({ type: "notice", level: "error", text: "Preset name cannot be empty" });
 			return;
 		}
 		const preset = {
@@ -271,7 +281,7 @@ export class SettingsService {
 	async applyPreset(name: string): Promise<void> {
 		const p = this.presets.find((x) => x.name === name);
 		if (!p) {
-			this.host.emit({ type: "notice", level: "error", text: `预设不存在：${name}` });
+			this.host.emit({ type: "notice", level: "error", text: `Preset not found: ${name}` });
 			return;
 		}
 		this.settings = {
@@ -279,9 +289,9 @@ export class SettingsService {
 			customSystemPrompt: p.customSystemPrompt,
 			disabledSkills: [...p.disabledSkills],
 			disabledExtensions: [...p.disabledExtensions],
-			// 旧版持久化的预设可能没有该字段——保留当前值。
+			// Older persisted presets may lack this field — keep the current value.
 			terminalToolsEnabled: p.terminalToolsEnabled ?? this.settings.terminalToolsEnabled,
-			// 终端接管偏好随预设走；旧预设缺字段时保留当前值。
+			// Terminal-backed-bash prefs travel with the preset; keep current value if an old preset lacks the field.
 			terminalBash: p.terminalBash ?? this.settings.terminalBash,
 			terminalBashIdleMs:
 				p.terminalBashIdleMs ?? this.settings.terminalBashIdleMs,
@@ -289,9 +299,11 @@ export class SettingsService {
 			reviewDisabledSkills: [
 				...(p.reviewDisabledSkills ?? this.settings.reviewDisabledSkills),
 			],
+			additionalSkillPaths: this.settings.additionalSkillPaths ?? [],
+			disabledPlugins: this.settings.disabledPlugins,
 			// Presets don't capture vision-bridge prefs — keep the current ones.
 			visionBridgeEnabled: this.settings.visionBridgeEnabled,
-			// 纯 UI 偏好不进预设——保留当前值。
+			// Pure UI prefs are not captured by presets — keep the current value.
 			thinkingWrap: this.settings.thinkingWrap,
 			visionBridgeModel: this.settings.visionBridgeModel,
 			visionBridgePromptMode: this.settings.visionBridgePromptMode,
@@ -321,7 +333,7 @@ export class SettingsService {
 			this.host.emit({
 				type: "notice",
 				level: "info",
-				text: "当前回复进行中，设置将在回复结束后自动应用",
+				text: "A reply is in progress; settings will apply when it finishes",
 			});
 			return;
 		}
@@ -334,12 +346,12 @@ export class SettingsService {
 			await this.host.reloadSession();
 			this.push();
 			this.host.flushSnapshot();
-			this.host.emit({ type: "notice", level: "info", text: "设置已应用" });
+			this.host.emit({ type: "notice", level: "info", text: "Settings applied" });
 		} catch (err) {
 			this.host.emit({
 				type: "notice",
 				level: "error",
-				text: `设置应用失败：${(err as Error).message}`,
+				text: `Failed to apply settings: ${(err as Error).message}`,
 			});
 		}
 	}

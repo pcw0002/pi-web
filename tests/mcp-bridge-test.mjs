@@ -1,9 +1,9 @@
 /**
- * MCP 工具桥端到端冒烟（零 token、自包含、独立端口 8990）：
- * 临时 data-dir 写 mcp.json（指向本地夹具服务器），起真实 server：
- *  - server 启动时 MCP 服务器被拉起（stdout 出现 ready 日志）
- *  - 工具数量正确（4）
- *  - MCP 服务器失败不炸 server 进程
+ * MCP tool-bridge end-to-end smoke (zero token, self-contained, isolated port 8990):
+ * write mcp.json in a temp data-dir (pointing at the local fixture server) and start a real server:
+ *  - MCP server is spawned at server start (ready log on stdout)
+ *  - tool count is correct (4)
+ *  - MCP server failure does not crash the server process
  */
 import { spawn } from "node:child_process";
 import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
@@ -26,7 +26,7 @@ async function main() {
 		JSON.stringify({
 			servers: {
 				csrv: {
-					command: process.execPath, // 真 node（测试环境没有 git-bash 别名）
+					command: process.execPath, // real node (test env has no git-bash alias)
 					args: [FIXTURE],
 				},
 				badsrv: { command: "definitely-not-a-real-cmd-xyz", args: [] },
@@ -50,21 +50,21 @@ async function main() {
 	server.stdout.on("data", (d) => (out += d.toString()));
 	server.stderr.on("data", (d) => (out += d.toString()));
 
-	// 等 server “ready” + MCP 就绪日志（最多 15s）
+	// wait for server “ready” + MCP ready log (up to 15s)
 	let ok = false;
 	for (let i = 0; i < 60 && !ok; i++) {
 		await sleep(250);
 		if (/listening|ready|available/i.test(out) && /\[mcp:csrv\] ready, 4 tools/.test(out)) ok = true;
 	}
-	if (!ok) throw new Error("server 或 MCP 未就绪。输出：\n" + out);
-	console.log("✓ MCP 服务器启动并握手（日志：[mcp:csrv] ready, 4 tools）");
+	if (!ok) throw new Error("server or MCP not ready. output:\n" + out);
+	console.log("✓ MCP server started and handshook (log: [mcp:csrv] ready, 4 tools)");
 
-	// badsrv 失败不应影响 server 存活
-	if (/definitely-not-a-real-cmd-xyz/.test(out) && !/\[mcp\] 服务器「badsrv」启动失败/.test(out)) {
-		// 只要求 server 还活着即可（失败路径经 rejectAll 归并日志）
+	// badsrv failure must not affect server liveness
+	if (/definitely-not-a-real-cmd-xyz/.test(out) && !/\[mcp\] server "badsrv" failed to start/.test(out)) {
+		// only require the server still alive (failure path is folded into logs via rejectAll)
 	}
-	if (server.exitCode !== null) throw new Error("server 崩了！");
-	console.log("✓ 坏服务器被隔离（进程存活）");
+	if (server.exitCode !== null) throw new Error("server crashed!");
+	console.log("✓ bad server was isolated (process alive)");
 
 	console.log("all ok");
 	server.kill();

@@ -3,9 +3,10 @@ import type { ClientMessage, UiPluginInfo } from "../types";
 import { useT } from "../i18n";
 
 /**
- * 插件声明式设置表单（manifest "settings" schema → 自动渲染）。
- * 值保存在 storage.json 的 "settings" 键（宿主统一管理），保存时发
- * plugin_settings，服务端校验 + 持久化 + 通知插件（onSettingsChanged）。
+ * Plugin declarative-settings form (manifest "settings" schema → auto-rendered).
+ * Values live under the "settings" key in storage.json (host-managed). Save
+ * sends plugin_settings; the server validates, persists, and notifies the
+ * plugin (onSettingsChanged).
  */
 export function PluginSettingsForm({
 	plugin,

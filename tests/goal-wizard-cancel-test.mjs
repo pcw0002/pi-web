@@ -14,7 +14,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
-// fileURLToPath: URL.pathname 在 Windows 下是 /E:/... 形式，直接当 cwd 会失败
+// fileURLToPath: URL.pathname on Windows is /E:/...; using it as cwd directly fails
 const REPO_ROOT = fileURLToPath(new globalThis.URL("../", import.meta.url));
 
 /* eslint-env node */
@@ -91,7 +91,7 @@ async function main() {
 	ws.send(JSON.stringify({ type: "hello", clientId: "wiz-cancel" }));
 	await next((m) => m.type === "snapshot", "initial snapshot");
 
-	ws.send(JSON.stringify({ type: "start_goal_wizard", text: "写一个文件同步工具", maxRounds: 4 }));
+	ws.send(JSON.stringify({ type: "start_goal_wizard", text: "Write a file-sync tool", maxRounds: 4 }));
 
 	// Wait for the FIRST question dialog, then cancel via clear_goal.
 	const d1 = await next((m) => m.type === "dialog", "first question", 40000);

@@ -1,21 +1,26 @@
 /**
  * Wire protocol types for the web frontend.
  *
- * ⚠️ 本文件不再手工维护协议类型：`export type *` 直接再导出唯一事实源
- * server/protocol.ts（纯类型，构建时整体擦除，不共享任何运行时代码）。
- * 协议改动只需改 server/protocol.ts，双端永远同步。
- * 之前的手工镜像已废弃——新增消息漏同步导致前端静默丢消息的坑从此不存在。
+ * ⚠️ Protocol types are no longer maintained by hand here: `export type *`
+ * re-exports the single source of truth server/protocol.ts (types only,
+ * erased at build time, no shared runtime). Protocol changes only need to
+ * touch server/protocol.ts and both ends stay in sync. The old hand-copied
+ * mirror is gone — the "new message silently dropped on the frontend" pit
+ * no longer exists.
  *
- * 只放**前端本地**的类型（不属于 wire 协议的 UI 数据结构）在下方。
+ * Only **frontend-local** types (UI data that is not part of the wire
+ * protocol) live below.
  */
 export type * from "../../server/protocol";
 
-// 本地类型引用到的协议类型（export type * 不会把名字带进本地作用域）
+// Protocol types referenced by local types (`export type *` does not bring
+// names into this file's local scope).
 import type { FileEntry } from "../../server/protocol";
 export type { FileEntry };
 
 // ---------------------------------------------------------------------------
-// 前端本地类型（server 不发送/接收这些结构本身，或仅作为消息字段的一部分）
+// Frontend-local types (the server does not send/receive these structures
+// themselves, or they appear only as a field of a message)
 // ---------------------------------------------------------------------------
 
 export interface FileListing {

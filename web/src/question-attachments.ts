@@ -1,21 +1,26 @@
 /**
- * question-attachments — 编辑重问的「原附件恢复」收集纯函数。
+ * question-attachments — pure collector that restores original attachments
+ * for edit-and-re-ask.
  *
- * Web UI 的 prompt 会把附件作为独立的 custom "file" aside 卡片、紧跟在该条
- * 用户消息之后持久化；编辑重问时 fork 会裁掉这些 aside（它们在新分支上），
- * 所以编辑器需要这份清单来恢复。收集三类：
- *   · 粘贴/上传的图片（imageData）—— 从 aside 的 image 块取 base64（含视觉
- *     桥转写卡片的缩略图）；
- *   · 上传的文件（uploadPath）—— 服务端已把字节落在 uploads 目录，重发
- *     details.path 让服务端重读即可（不进快照、不重复 base64）；
- *   · 工作区路径附件（inline/reference/lines/folder）—— 相对路径在 fork 后
- *     仍有效，带 path+mode 重发走同一附件管线。
+ * The web UI persists attachments as standalone custom "file" aside cards
+ * immediately after the user message. Forking for edit-and-re-ask drops
+ * those asides (they sit after the fork point), so the editor needs this
+ * list to restore them. Three kinds:
+ *   · Pasted/uploaded images (imageData) — base64 from the aside's image
+ *     blocks (including vision-bridge thumbnail cards);
+ *   · Uploaded files (uploadPath) — bytes already on disk under uploads;
+ *     re-send details.path so the server re-reads them (not in the snapshot,
+ *     no duplicate base64);
+ *   · Workspace-path attachments (inline/reference/lines/folder) — relative
+ *     paths stay valid after fork; re-send path+mode through the same
+ *     attachment pipeline.
  *
- * 纯函数、零依赖。输入用宽类型（content: readonly unknown[]）+ 内部收窄，
- * 既不 import ./types（单测在 NodeNext 下会因扩展名缺失 shim 报 TS2835），
- * 也让任意 UiMessage 都能传入。
+ * Pure, zero-dependency. Input is a wide type (content: readonly unknown[])
+ * narrowed internally so we neither import ./types (unit tests under NodeNext
+ * would hit TS2835 from the extension-less shim) nor reject arbitrary
+ * UiMessage values.
  */
-/** PromptAttachment 的结构化镜像（与 server/protocol.ts 一致）。 */
+/** Structural mirror of PromptAttachment (matches server/protocol.ts). */
 export interface EditPromptAttachment {
 	path: string;
 	mode?: "inline" | "reference" | "lines";
@@ -28,13 +33,13 @@ export interface EditPromptAttachment {
 	size?: number;
 }
 
-/** image 块（运行时收窄用）。 */
+/** Image block (runtime narrowing). */
 interface ImageBlock {
 	type: "image";
 	dataUrl?: string;
 }
 
-/** 从 image 块还原 imageData 附件（dataUrl → 纯 base64）；有图片块返回 true。 */
+/** Restore imageData attachments from image blocks (dataUrl → raw base64); returns true if any image block was found. */
 function pushImageAttachments(
 	atts: EditPromptAttachment[],
 	content: readonly unknown[],

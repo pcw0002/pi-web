@@ -1,5 +1,5 @@
 /**
- * 补充 button test: while the agent is replying, typing + clicking 补充
+ * Follow-up button test: while the agent is replying, typing + clicking Follow-up
  * queues the message (followUp); it appears in the chat the moment the
  * current reply finishes, and the agent answers it.
  */
@@ -12,7 +12,7 @@ import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
-// fileURLToPath: URL.pathname 在 Windows 下是 /E:/... 形式，直接当 cwd 会失败
+// fileURLToPath: URL.pathname on Windows is /E:/...; using it as cwd directly fails
 const REPO_ROOT = fileURLToPath(new globalThis.URL("../", import.meta.url));
 
 const HEADLESS = CHROME_PATH;
@@ -59,28 +59,28 @@ await page.waitForSelector("textarea", { timeout: 15000 });
 await sleep(800);
 
 // --- 1. send the first prompt; wait for streaming (stop button) ---
-await page.locator("textarea").fill("只回复两个字：好的");
+await page.locator("textarea").fill("Reply with exactly two words: OK");
 await page.keyboard.press("Enter");
 await page
 	.waitForSelector(".btn.stop", { timeout: 60000 })
 	.then(() => check("first reply streaming", true))
 	.catch(() => check("first reply streaming", false, "no stop button"));
 
-// --- 2. type a supplement while streaming → 补充 button appears ---
-await page.locator("textarea").fill("补充一句话：请再说一遍");
+// --- 2. type a supplement while streaming → Follow-up button appears ---
+await page.locator("textarea").fill("Follow-up: please say that again");
 await sleep(400);
 const supplementBtn = page.locator(".btn.supplement");
 check(
-	"补充 button visible while streaming",
+	"Follow-up button visible while streaming",
 	(await supplementBtn.count()) === 1,
 	`count=${await supplementBtn.count()}`,
 );
 
-// --- 3. click 补充 → input clears + queue hint shows ---
+// --- 3. click Follow-up → input clears + queue hint shows ---
 await supplementBtn.click();
 await sleep(600);
 check(
-	"input cleared after 补充",
+	"input cleared after Follow-up",
 	(await page.locator("textarea").inputValue()) === "",
 );
 const hint = await page
@@ -89,7 +89,7 @@ const hint = await page
 	.catch(() => []);
 check(
 	"queue hint shows queued follow-up",
-	hint.some((h) => h.includes("跟进消息排队中") || h.includes("queued")),
+	hint.some((h) => h.includes("Queued") || h.includes("queued")),
 	hint.join(" | "),
 );
 
@@ -104,7 +104,7 @@ await page
 // appear in the chat, then a second reply streams.
 const supplementSeen = await page
 	.waitForFunction(
-		() => document.body.innerText.includes("补充一句话：请再说一遍"),
+		() => document.body.innerText.includes("Follow-up: please say that again"),
 		{ timeout: 180000 },
 	)
 	.then(() => true)

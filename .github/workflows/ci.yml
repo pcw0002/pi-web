@@ -21,7 +21,7 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      # 协议双端手工同步校验（server/protocol.ts ↔ web/src/types.ts）
+      # Dual-end protocol sync check (server/protocol.ts ↔ web/src/types.ts)
       - name: Check protocol sync
         run: node scripts/check-protocol-sync.mjs
 
@@ -31,10 +31,10 @@ jobs:
       - name: Build
         run: npm run build
 
-      # 纯函数单测（毫秒级、零 token）
+      # Pure-function unit tests (millisecond-scale, zero token)
       - name: Unit tests
         run: npx vitest run
 
-      # 零 token 协议冒烟（每个测试自起隔离 server：独立端口 + 临时 data-dir）
+      # Zero-token protocol smoke (each test starts an isolated server: own port + temp data-dir)
       - name: Protocol smoke tests
         run: node tests/run-smoke.mjs

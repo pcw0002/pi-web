@@ -16,7 +16,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import { setTimeout as sleep } from "node:timers/promises";
-// fileURLToPath: URL.pathname 在 Windows 下是 /E:/... 形式，直接当 cwd 会失败
+// fileURLToPath: URL.pathname on Windows is /E:/...; using it as cwd directly fails
 const REPO_ROOT = fileURLToPath(new globalThis.URL("../", import.meta.url));
 
 const PORT = 8898;
@@ -45,7 +45,7 @@ const server = spawn("node", ["dist/server/index.js"], {
 		...process.env,
 		PORT: String(PORT),
 		PI_WEB_CWD: A,
-		// 隔离 client-state：不污染真实 ~/.pi-web（agent 目录保留 —— 需要真模型凭据）
+		// isolate client-state: do not pollute real ~/.pi-web (keep the agent dir — need real model creds)
 		PI_WEB_DATA_DIR: mkdtempSync(join(tmpdir(), "piweb-titlejsonl-")),
 	},
 	stdio: "ignore",
@@ -72,7 +72,7 @@ ws.on("message", (d) => {
 });
 ws.on("open", () => {
 	ws.send(JSON.stringify({ type: "hello", clientId }));
-	// sessions 推送是懒加载 opt-in：必须显式请求，否则服务端永不推 `sessions`
+	// sessions push is lazy opt-in: must request explicitly, otherwise the server never pushes `sessions`
 	ws.send(JSON.stringify({ type: "list_sessions" }));
 });
 
@@ -104,9 +104,9 @@ check(
 //    persisted with its title (the ACTIVE conversation is not in the running
 //    list — it only enters when displaced while streaming — so the title is
 //    observed via the history list instead).
-ws.send(JSON.stringify({ type: "prompt", text: "只回复两个字：好的" }));
+ws.send(JSON.stringify({ type: "prompt", text: "Reply with exactly two words: OK" }));
 const titled = await waitFor(
-	() => sessions.some((s) => s.firstMessage?.includes("只回复")),
+	() => sessions.some((s) => s.firstMessage?.includes("Reply with exactly")),
 	"session persisted with title",
 );
 check(
@@ -150,7 +150,7 @@ ws.send(JSON.stringify({ type: "set_cwd", path: A }));
 const back = await waitFor(
 	() =>
 		snapshot?.cwd === A &&
-		sessions.some((s) => s.firstMessage?.includes("只回复")),
+		sessions.some((s) => s.firstMessage?.includes("Reply with exactly")),
 	"A session resumable again",
 	15000,
 );

@@ -14,7 +14,7 @@ import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
-// fileURLToPath: URL.pathname 在 Windows 下是 /E:/... 形式，直接当 cwd 会失败
+// fileURLToPath: URL.pathname on Windows is /E:/...; using it as cwd directly fails
 const REPO_ROOT = fileURLToPath(new globalThis.URL("../", import.meta.url));
 
 const HEADLESS = CHROME_PATH;
@@ -59,7 +59,7 @@ const histTitles = await page
 	.allTextContents();
 check(
 	"history title present",
-	histTitles.some((t) => t.includes("历史对话")),
+	histTitles.some((t) => t.includes("History")),
 );
 check(
 	"no convs section yet",
@@ -70,14 +70,14 @@ check(
 //    the running-conversations section must STAY hidden by design.
 await page.evaluate(() => {
 	const btn = [...document.querySelectorAll("button")].find(
-		(b) => b.textContent && b.textContent.includes("新对话"),
+		(b) => b.textContent && b.textContent.includes("New chat"),
 	);
 	btn?.click();
 });
 await sleep(900);
 await page.evaluate(() => {
 	const btn = [...document.querySelectorAll("button")].find(
-		(b) => b.textContent && b.textContent.includes("新对话"),
+		(b) => b.textContent && b.textContent.includes("New chat"),
 	);
 	btn?.click();
 });
@@ -91,8 +91,8 @@ const convTitles = await page
 	.locator(".panel-left .panel-section-title")
 	.allTextContents();
 check(
-	"no 运行的对话 title without listed conversations",
-	!convTitles.some((t) => t.includes("运行的对话")),
+	"no running-conversations title without listed conversations",
+	!convTitles.some((t) => t.includes("Running chats")),
 	convTitles.join("|"),
 );
 

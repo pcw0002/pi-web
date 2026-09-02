@@ -17,11 +17,14 @@ import { ChatInput } from "./components/ChatInput";
 import { GoalBar } from "./components/GoalBar";
 import { FooterBar } from "./components/FooterBar";
 import { Dialog } from "./components/Dialog";
-// 终端视图懒加载：xterm.js 体积大且只在切到终端时才需要，拆出主包
+// Lazy-load the terminal view: xterm.js is large and only needed when switching to the terminal, so keep it out of the main bundle.
 const TerminalPanel = lazy(() =>
 	import("./components/TerminalPanel").then((m) => ({ default: m.TerminalPanel })),
 );
 import { ScmPanel } from "./components/SCMPanel";
+import { ReviewPanel } from "./components/ReviewPanel";
+import { ReviewChip } from "./components/ReviewChip";
+import { SessionTreeModal } from "./components/SessionTreeModal";
 import { PluginView } from "./components/PluginView";
 import {
 	syncPluginViews,
@@ -126,7 +129,7 @@ function NoticeToast({
  *  cheap before the first snapshot arrives. */
 const EMPTY_MESSAGES: UiMessage[] = [];
 
-// ---- 可拖拽面板宽度（桌面端；≤768px 抽屉模式固定宽度不受影响）----
+// ---- Draggable panel widths (desktop; ≤768px drawer mode uses a fixed width) ----
 const PANEL_MIN = 180;
 const PANEL_MAX = 520;
 const PANEL_DEFAULT = 240;
@@ -137,7 +140,7 @@ function readPanelWidth(side: PanelSide): number {
 	return Number.isFinite(v) && v >= PANEL_MIN && v <= PANEL_MAX ? v : PANEL_DEFAULT;
 }
 
-/** 面板与主区之间的拖拽分隔条：拖动改宽度，双击复位。 */
+/** Drag handle between a side panel and the main pane: drag to resize, double-click to reset. */
 function ResizeHandle({
 	side,
 	width,
@@ -155,7 +158,7 @@ function ResizeHandle({
 			const startW = width;
 			let last = startW;
 			const move = (ev: PointerEvent) => {
-				// 左侧手柄向右拖变宽，右侧相反
+				// Left handle: drag right to widen; right handle is the opposite.
 				const delta = side === "left" ? ev.clientX - startX : startX - ev.clientX;
 				last = Math.min(PANEL_MAX, Math.max(PANEL_MIN, Math.round(startW + delta)));
 				onResize(last);
@@ -182,12 +185,12 @@ function ResizeHandle({
 	);
 }
 
-/** 顶栏视图：内置三个 + 每个已装插件一个 `plugin:<id>`。 */
-type ViewName = "chat" | "terminal" | "git" | `plugin:${string}`;
+/** Top-bar views: three built-in plus one `plugin:<id>` per installed plugin. */
+type ViewName = "chat" | "terminal" | "git" | "review" | `plugin:${string}`;
 
 export function App() {
 	const t = useT();
-	const { chat, send, dismissNotice, pushNotice, terminal } = useChat();
+	const { chat, send, dismissNotice, pushNotice, terminal, ackReviewNudge, closeSessionTree } = useChat();
 	const [attachments, setAttachments] = useState<PendingAttachment[]>([]);
 	const [previewFile, setPreviewFile] = useState<PreviewFile | null>(null);
 	/** Full-window file drag in progress (issue #19) — shows the app-wide
@@ -195,7 +198,7 @@ export function App() {
 	 *  its own stopPropagation handlers. */
 	const [appDragOver, setAppDragOver] = useState(false);
 	const [view, setView] = useState<ViewName>("chat");
-	// 已安装且未在设置面板禁用的插件（决定 tab 与视图加载）。
+	// Installed plugins that are not disabled in settings (drives tabs and view loading).
 	const enabledPlugins = useMemo(
 		() =>
 			chat.plugins.filter(
@@ -203,18 +206,19 @@ export function App() {
 			),
 		[chat.plugins, chat.settings?.disabledPlugins],
 	);
-	// 已加载的插件视图（bundle 动态 import 完成后出现）。
+	// Loaded plugin views (appear once the bundle's dynamic import finishes).
 	const [pluginViews, setPluginViews] = useState<LoadedPluginView[]>([]);
 	useEffect(
 		() => subscribeLoadedPluginViews(setPluginViews),
 		[],
 	);
-	// 目录清单/禁用集合/epoch 变化 → 同步注册表：新增的拉取、消失的清理
-	// （React 卸载对应 PluginView 时调用插件的 cleanup）、服务端 reload 后重拉。
+	// Catalog / disabled set / epoch change → sync the registry: fetch new
+	// ones, clean up gone ones (React calls the plugin's cleanup when the
+	// matching PluginView unmounts), re-fetch after a server reload.
 	useEffect(() => {
 		void syncPluginViews(enabledPlugins, chat.pluginsEpoch);
 	}, [enabledPlugins, chat.pluginsEpoch]);
-	// 左右面板可拖拽宽度（桌面端）：localStorage 持久化，双击手柄复位。
+	// Draggable left/right panel widths (desktop): persisted in localStorage, double-click the handle to reset.
 	const [leftWidth, setLeftWidth] = useState(() => readPanelWidth("left"));
 	const [rightWidth, setRightWidth] = useState(() => readPanelWidth("right"));
 	const resizeLeft = useCallback((w: number) => setLeftWidth(w), []);
@@ -235,7 +239,7 @@ export function App() {
 	}, []);
 	// Setup modal: one-time prompt when the pi agent config is missing.
 	const [setupDismissed, setSetupDismissed] = useState(false);
-	// Custom model config panel (model dropdown → 管理模型).
+	// Custom model config panel (model dropdown → Manage models).
 	const [manageModelsOpen, setManageModelsOpen] = useState(false);
 	// Settings panel (system prompt / skills / extensions / presets).
 	const [settingsOpen, setSettingsOpen] = useState(false);
@@ -244,12 +248,14 @@ export function App() {
 	// Global search panel (sessions / projects / workspace files).
 	const [globalSearchOpen, setGlobalSearchOpen] = useState(false);
 
-	// 插件视图桥：插件无 chat 上下文，通过窗口事件请求在可见终端执行命令
-	// （与 SCM 面板同款：已有同名 tab 原地重跑，否则新建并自动切到终端视图）。
+	// Plugin-view bridge: plugins have no chat context, so they request a
+	// visible-terminal command via a window event (same pattern as the SCM
+	// panel: re-run an existing same-named tab in place, otherwise create one
+	// and switch to the terminal view).
 	useEffect(() => {
 		const onPluginRunCommand = (e: Event) => {
 			const detail = (e as CustomEvent<{ title?: string; command?: string }>).detail;
-			const title = detail?.title || "插件命令";
+			const title = detail?.title || t("pluginCommand");
 			const command = detail?.command;
 			if (!command || !chat.ready) return;
 			const def: CommandDef = { name: title, command, cwd: "${pwd}" };
@@ -282,7 +288,7 @@ export function App() {
 		};
 		window.addEventListener("pi-web-ui:plugin-run-command", onPluginRunCommand);
 		return () => window.removeEventListener("pi-web-ui:plugin-run-command", onPluginRunCommand);
-	}, [chat, terminal, send]);
+	}, [chat, terminal, send, t]);
 
 	// Ctrl+K / Cmd+K opens global search (also reachable via the topbar button).
 	useEffect(() => {
@@ -611,6 +617,7 @@ export function App() {
 					if (terminalOpenRequested.current && createShell()) {
 						terminalOpenRequested.current = false;
 					}
+					if (v === "review") ackReviewNudge();
 					setView(v);
 					setDrawer(null);
 				}}
@@ -679,6 +686,28 @@ export function App() {
 								{chat.ready ? t("loadingSession") : t("connectingServer")}
 							</div>
 						)}
+						<ReviewChip
+							pendingCount={chat.reviewStatus.pending.length}
+							commentCount={chat.reviewStatus.commentCount}
+							nudge={chat.reviewNudge}
+							onApply={() => {
+								send({ type: "review_apply" });
+								ackReviewNudge();
+							}}
+							onOpen={() => {
+								ackReviewNudge();
+								setView("review");
+							}}
+							onResolve={() => {
+								send({ type: "review_set_status", status: "applied" });
+								ackReviewNudge();
+							}}
+							onDismiss={() => {
+								send({ type: "review_set_status", status: "dismissed" });
+								ackReviewNudge();
+							}}
+							onDismissNudge={ackReviewNudge}
+						/>
 						<GoalBar
 							send={send}
 							goal={chat.goal}
@@ -686,7 +715,7 @@ export function App() {
 							modelsLoading={chat.modelsLoading}
 							activeConversationId={chat.activeConversationId}
 						/>
-						{/* 扩展问卷：非模态内联面板，插在输入框上方，对话内容保持可见 */}
+						{/* Extension questionnaire: non-modal inline panel above the input; conversation stays visible */}
 						{chat.dialog && <Dialog dialog={chat.dialog} send={send} />}
 						<ChatInput
 							send={send}
@@ -742,6 +771,14 @@ export function App() {
 						terminal={terminal}
 						active={view === "git"}
 						onSwitchToTerminal={() => setView("terminal")}
+					/>
+				</div>
+				<div className={`view-pane ${view === "review" ? "" : "hidden"}`}>
+					<ReviewPanel
+						chat={chat}
+						send={send}
+						active={view === "review"}
+						onSwitchToChat={() => setView("chat")}
 					/>
 				</div>
 				{pluginViews.map((entry) => {
@@ -823,6 +860,16 @@ export function App() {
 					onPreviewFile={(path, name) => {
 						setPreviewFile({ path, name });
 					}}
+				/>
+			)}
+			{chat.sessionTree && (
+				<SessionTreeModal
+					items={chat.sessionTree}
+					onJump={(entryId) => {
+						send({ type: "navigate_tree", entryId });
+						closeSessionTree();
+					}}
+					onClose={closeSessionTree}
 				/>
 			)}
 		</div>

@@ -1,0 +1,10 @@
+{
+	"name": "@local-review/core",
+	"version": "0.0.0",
+	"private": true,
+	"type": "module",
+	"description": "Git diff + .local-review artifacts. No UI, no LLM.",
+	"exports": {
+		".": "./src/index.ts"
+	}
+}

@@ -19,7 +19,7 @@ import { mkdtempSync, writeFileSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
-// fileURLToPath: URL.pathname 在 Windows 下是 /E:/... 形式，直接当 cwd 会失败
+// fileURLToPath: URL.pathname on Windows is /E:/...; using it as cwd directly fails
 const REPO_ROOT = fileURLToPath(new globalThis.URL("../", import.meta.url));
 
 const HEADLESS = CHROME_PATH;
@@ -83,8 +83,8 @@ async function stopServer() {
 }
 
 async function openThemeMenu(page) {
-	// Open the theme dropdown (desktop toolbar, FiSun chip labeled "主题"/"Theme").
-	await page.locator(".topbar-desktop .dropdown button.chip").filter({ hasText: "主题" }).click();
+	// Open the theme dropdown (desktop toolbar, FiSun chip labeled "Theme").
+	await page.locator(".topbar-desktop .dropdown button.chip").filter({ hasText: "Theme" }).click();
 }
 
 let browser;
@@ -110,7 +110,7 @@ try {
 	const mdPrevInfo = themes.themes.find((t) => t.id === "md-preview");
 	check(
 		"theme-name header gives display names",
-		whiteInfo?.name === "白色" && mdPrevInfo?.name === "紫晕",
+		whiteInfo?.name === "White" && mdPrevInfo?.name === "Halo",
 		`white=${whiteInfo?.name} md-preview=${mdPrevInfo?.name}`,
 	);
 	const lightInfo = themes.themes.find((t) => t.id === "light");
@@ -158,7 +158,7 @@ try {
 
 	// 5. Switching back to default removes the injected link.
 	await openThemeMenu(page);
-	await page.locator(".dd-item", { hasText: "深色" }).first().click();
+	await page.locator(".dd-item", { hasText: "Dark" }).first().click();
 	await page.waitForTimeout(800);
 	const linkGone = await page.evaluate(
 		() => document.getElementById("theme-stylesheet") === null,

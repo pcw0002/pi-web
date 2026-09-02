@@ -1,8 +1,8 @@
 /**
- * 插件 AI 工具扩展点单测：
- *  - syncPluginToolsIntoSession：三向 diff（新增/更新/移除）+ 不兼容对象降级；
- *  - PluginManager.registerAgentTool：注册/重名拒绝/反激活自动注销/onAgentToolsChanged 回调。
- * 零 token、零网络，毫秒级。
+ * Plugin AI-tool extension-point unit tests:
+ *  - syncPluginToolsIntoSession: three-way diff (add/update/remove) + incompatible-object fallback;
+ *  - PluginManager.registerAgentTool: register / name-clash reject / auto-unregister on deactivate / onAgentToolsChanged callback.
+ * Zero token, zero network, millisecond-scale.
  */
 import { describe, expect, it } from "vitest";
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
@@ -24,7 +24,7 @@ function okSession() {
 }
 
 describe("syncPluginToolsIntoSession", () => {
-	it("新增工具并触发 registry 重建", () => {
+	it("adds tools and triggers registry rebuild", () => {
 		const { session, calls } = okSession();
 		const defs = [{ name: "mail_list" }, { name: "mail_read" }];
 		const next = syncPluginToolsIntoSession(session as never, defs as never, new Set());
@@ -33,26 +33,26 @@ describe("syncPluginToolsIntoSession", () => {
 		expect(calls).toHaveLength(1);
 	});
 
-	it("定义未变化时不重建（幂等）", () => {
+	it("does not rebuild when definitions are unchanged (idempotent)", () => {
 		const { session, calls } = okSession();
 		const defs = [{ name: "a" }];
 		syncPluginToolsIntoSession(session as never, defs as never, new Set());
 		const again = syncPluginToolsIntoSession(session as never, defs as never, new Set(defs.map((d) => d.name)));
 		expect(again).toEqual(new Set(["a"]));
-		expect(calls).toHaveLength(1); // 第二次没有 changed，不重建
+		expect(calls).toHaveLength(1); // second call had no change, no rebuild
 	});
 
-	it("移除已注销的工具名", () => {
+	it("removes unregistered tool names", () => {
 		const { session, calls } = okSession();
 		session._customTools = [{ name: "bash" }, { name: "mail_list" }];
 		const prev = new Set(["mail_list"]);
 		const next = syncPluginToolsIntoSession(session as never, [] as never, prev);
 		expect(next).toEqual(new Set());
-		expect(session._customTools!.map((d) => d.name)).toEqual(["bash"]); // 内置工具不动
+		expect(session._customTools!.map((d) => d.name)).toEqual(["bash"]); // built-in tools untouched
 		expect(calls).toHaveLength(1);
 	});
 
-	it("对象不兼容时返回 null 静默降级", () => {
+	it("returns null and silently falls back when the object is incompatible", () => {
 		expect(syncPluginToolsIntoSession({} as never, [], new Set())).toBeNull();
 		expect(syncPluginToolsIntoSession({ _customTools: [] } as never, [], new Set())).toBeNull();
 	});
@@ -63,12 +63,12 @@ describe("PluginManager.registerAgentTool", () => {
 		mkdirSync(join(dir, "plugins", "fixture"), { recursive: true });
 		writeFileSync(
 			join(dir, "plugins", "fixture", "manifest.json"),
-			JSON.stringify({ name: "夹具" }),
+			JSON.stringify({ name: "fixture" }),
 		);
 		writeFileSync(join(dir, "plugins", "fixture", "index.mjs"), body);
 	}
 
-	it("注册 → 可读取 → 反激活自动注销 → 变化回调触发", async () => {
+	it("register → readable → auto-unregister on deactivate → change callback fires", async () => {
 		const base = mkdtempSync(join(tmpdir(), "pwi-plug-tools-"));
 		try {
 			makeFixture(
@@ -95,14 +95,14 @@ export default {
 			expect(mgr.getAgentTools().map((t) => t.name)).toEqual(["fixture_ping"]);
 			expect(changes).toBeGreaterThanOrEqual(1);
 
-			// 重名注册被拒绝（返回的注销函数是空操作）
+			// Duplicate-name registration is rejected (returned unregister fn is a no-op)
 			mgr.dispose();
 			await mgr.ensureLoaded();
 			const before = mgr.getAgentTools().length;
 			void before;
 			mgr.dispose();
 
-			// 删除插件目录后重新加载 → 工具随之消失
+			// After deleting the plugin dir and reloading → tools disappear with it
 			rmSync(join(base, "plugins", "fixture"), { recursive: true, force: true });
 			const mgr2 = new PluginManager(base, process.cwd());
 			await mgr2.ensureLoaded();

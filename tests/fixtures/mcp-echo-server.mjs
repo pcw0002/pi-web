@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 /**
- * MCP 测试夹具服务器 —— 极简 NDJSON JSON-RPC 实现，用作 mcp-bridge 的对手端。
- * 工具：echo（原样回传 parameters）、add（a+b）、fail（isError 工具）、
- * slow（延迟后返回，用于校验超时）。
- * 用法：node mcp-echo-server.mjs [delay-resp-ms]
+ * MCP test fixture server — minimal NDJSON JSON-RPC peer for mcp-bridge.
+ * Tools: echo (echoes parameters), add (a+b), fail (isError tool),
+ * slow (returns after a delay, for timeout checks).
+ * Usage: node mcp-echo-server.mjs [delay-resp-ms]
  */
 import { createInterface } from "node:readline";
 
@@ -12,20 +12,20 @@ const RESP_DELAY = Number(process.argv[2] ?? 0);
 const TOOLS = [
 	{
 		name: "echo",
-		description: "原样返回传入的 parameters 对象",
+		description: "echo the incoming parameters object as-is",
 		inputSchema: { type: "object", properties: { msg: { type: "string" } } },
 	},
 	{
 		name: "add",
-		description: "两个数相加",
+		description: "add two numbers",
 		inputSchema: {
 			type: "object",
 			properties: { a: { type: "number" }, b: { type: "number" } },
 			required: ["a", "b"],
 		},
 	},
-	{ name: "fail", description: "总是失败（isError）", inputSchema: { type: "object" } },
-	{ name: "slow", description: "睡眠 resp-delay 后返回", inputSchema: { type: "object" } },
+	{ name: "fail", description: "always fails (isError)", inputSchema: { type: "object" } },
+	{ name: "slow", description: "sleep then return after resp-delay", inputSchema: { type: "object" } },
 ];
 
 function reply(msg) {
@@ -43,7 +43,7 @@ rl.on("line", (line) => {
 	} catch {
 		return;
 	}
-	// notification（无 id）
+	// notification (no id)
 	if (msg.id === undefined) return;
 
 	if (msg.method === "initialize") {
@@ -65,12 +65,12 @@ rl.on("line", (line) => {
 		}
 		if (name === "fail") {
 			return finish(msg.id, {
-				content: [{ type: "text", text: "boom: 已知的失败" }],
+				content: [{ type: "text", text: "boom: known failure" }],
 				isError: true,
 			});
 		}
 		if (name === "slow") {
-			// 用进程参数里的延迟；默认 5000ms（测试里会注入更小的波长 → 超时）
+			// delay from process args; default 5000ms (tests inject a shorter window → timeout)
 			const d = Number(process.env.MCP_SLOW_MS ?? 5000);
 			return setTimeout(() => finish(msg.id, { content: [{ type: "text", text: "slow done" }] }), d);
 		}

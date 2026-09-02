@@ -20,6 +20,7 @@ import {
 	mkdirSync,
 	watch,
 } from "node:fs";
+import { homedir } from "node:os";
 import { basename, dirname, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
@@ -132,7 +133,7 @@ const UI_MESSAGE_CACHE_CAP = 4096;
 export class QuiesceRejectedError extends Error {
 	readonly code = "QUIESCED";
 	constructor(detail: string) {
-		super(`服务器正在排空存量工作（quiesce）——${detail}`);
+		super(`Server is draining (quiesce) — ${detail}`);
 		this.name = "QuiesceRejectedError";
 	}
 }
@@ -161,7 +162,7 @@ const WINDOWS_PERSONA = `You are a coding agent running on Windows. The bash too
 - NEVER run interactive or foreground long-running commands through the bash tool (vi, less, top, python -, node -, npm run dev, sleep 10000). For servers/daemons use background execution with output redirected to a log file, then poll the log; stop them when done.
 - In the interactive terminal (TTY) — which is Git Bash too, not PowerShell — NEVER use heredocs (<<'EOF' ... EOF) or here-strings, and NEVER start interactive programs (vi, less, python -, node -, npm init): they wait for keyboard input that never arrives and hang the terminal forever. Prefer writing a temp script file (e.g. .pi-tmp.sh) and running it non-interactively. ALWAYS pass a timeout to long-running commands (e.g. \`timeout 120 npm run dev\`).
 
-Many legacy Chinese text files (.html/.txt/.md/.log, exported documents) are GBK/GB2312 encoded: the read tool decodes UTF-8 only and will show mojibake (乱码) for them. If a file's content looks garbled, read it through the terminal instead: in Git Bash use \`cat file | iconv -f GBK -t UTF-8\` (or \`iconv -f GBK -t UTF-8 file\`); in cmd use \`chcp 65001 && type file\`; in PowerShell use \`Get-Content -Encoding Default file\`. Never paste mojibake into your reasoning or answer — describe the decoded content instead.`;
+Many legacy Chinese text files (.html/.txt/.md/.log, exported documents) are GBK/GB2312 encoded: the read tool decodes UTF-8 only and will show mojibake for them. If a file's content looks garbled, read it through the terminal instead: in Git Bash use \`cat file | iconv -f GBK -t UTF-8\` (or \`iconv -f GBK -t UTF-8 file\`); in cmd use \`chcp 65001 && type file\`; in PowerShell use \`Get-Content -Encoding Default file\`. Never paste mojibake into your reasoning or answer — describe the decoded content instead.`;
 /**
  * Killable bash tool: wraps the SDK bash tool with operations that register
  * their own AbortController into a client-level set. abortBash() aborts only
@@ -213,8 +214,9 @@ function makeKillableBashTool(
 }
 
 /**
- * 动态分流 bash：调用时按设置决定走哪套实现——「终端接管 bash」开关因此
- * 即时生效（customTools 在 runtime 创建时固定，不能在创建时二选一）。
+ * Dynamic bash dispatch: at call time the setting picks which implementation
+ * runs — so the "terminal-backed bash" toggle takes effect immediately
+ * (customTools is fixed when the runtime is created, so you cannot pick one at creation).
  */
 function makeAdaptiveBashTool(
 	killable: ToolDefinition,
@@ -235,8 +237,8 @@ function makeAdaptiveBashTool(
 }
 
 /**
- * 插件结构化工具 → SDK ToolDefinition。
- * execute 返回值宽容处理：{content,details} 原样收编；字符串/对象包成文本块。
+ * Plugin structured tool → SDK ToolDefinition.
+ * execute return values are handled permissively: {content,details} is taken as-is; a string/object is wrapped as a text block.
  */
 function pluginToolToDefinition(tool: PluginAgentTool): ToolDefinition {
 	const normalize = (result: unknown): {
@@ -400,7 +402,7 @@ interface Conversation {
 	uiMessageCache: Map<string, UiMessage>;
 	lastMessagesSig: string;
 	lastMessagesArray: UiMessage[];
-	/** Actual queued prompt TEXTS (steer = 插队, followUp = 排队) — the UI
+	/** Actual queued prompt TEXTS (steer = cut in, followUp = queued) — the UI
 	 *  renders them as pending bubbles in the real message list. */
 	queueSteering: string[];
 	queueFollowUp: string[];
@@ -426,7 +428,7 @@ const TOOL_WATCHDOG_TIMEOUT_MS = (() => {
 /** Cap on simultaneously open conversations of ONE project (each keeps a full
  *  runtime alive; conversations of other projects keep their own lists). */
 const MAX_OPEN_CONVERSATIONS = 8;
-const DEFAULT_CONV_TITLE = "新对话";
+const DEFAULT_CONV_TITLE = "New chat";
 
 
 /** First user text in a session, truncated for the conversation list. */
@@ -486,14 +488,14 @@ export class ClientSession {
 		| undefined;
 
 	// -----------------------------------------------------------------------
-	// Goal / review / wizard —— 自包含模块，见 goal-service.ts。每个对话有独立
-	// 的 GoalStatus，审查可并发；宿主回调在构造函数里接入。
+	// Goal / review / wizard — self-contained module, see goal-service.ts. Each
+	// conversation has its own GoalStatus; reviews can run concurrently. Host callbacks are wired in the constructor.
 	// -----------------------------------------------------------------------
 	private readonly goalSvc: GoalService;
 	/** Settings-panel state (system prompt + disabled skills/extensions) —
-	 *  自包含模块，见 settings-service.ts。resource-loader overrides 在每次
-	 *  reload() 时读 current 的最新值，session.reload() 即可应用到运行中 runtime。 */
-	private settingsSvc!: SettingsService; // 构造函数里创建（需要 clientId/stateStore）
+	 *  Self-contained module, see settings-service.ts. resource-loader overrides
+	 *  read the latest current values on every reload(), so session.reload() applies them to the running runtime. */
+	private settingsSvc!: SettingsService; // created in the constructor (needs clientId/stateStore)
 	/** How long a hard abort waits for session.abort() to make the run idle
 	 *  before force-resetting the conversation (model streams that ignore the
 	 *  abort signal would otherwise leave the chat stuck forever). */
@@ -505,9 +507,9 @@ export class ClientSession {
 	/** Live AbortControllers of THIS client's running bash tool calls — aborting
 	 *  them kills only the command (agent run and conversation continue). */
 	private bashKills = new Set<AbortController>();
-	/** Background-server tracking (port snapshots + 后台任务 panel state) —
-	 *  自包含模块，见 bg-servers.ts。列表按 CLIENT 存活，不随对话切换/结束消失。 */
-	/** 文件树 / 预览读写 / SCM 查询 / watcher —— 自包含模块，见 files-service.ts。 */
+	/** Background-server tracking (port snapshots + background-tasks panel state) —
+	 *  self-contained module, see bg-servers.ts. The list lives per CLIENT and survives conversation switches/ends. */
+	/** File tree / preview R/W / SCM queries / watcher — self-contained module, see files-service.ts. */
 	private readonly files = new FilesService({
 		emit: (msg) => this.emit(msg),
 		isDisposed: () => this.disposed,
@@ -518,22 +520,22 @@ export class ClientSession {
 		emit: (msg) => this.emit(msg),
 		flushSnapshot: () => this.flushSnapshot(),
 		isDisposed: () => this.disposed,
-		// 插件注册的常驻任务（host.registerBackgroundTask）并入同一「后台任务」面板。
+		// Plugin-registered resident tasks (host.registerBackgroundTask) are folded into the same background-tasks panel.
 		pluginTasks: () => this.pluginBgTasksProvider?.() ?? [],
 	});
 
-	/** index.ts 注入（经 AgentService 拷贝到每个新会话）：把 SDK 工具执行事件转发给
-	 *  插件（PluginManager.emitToolEvent）。未设置时不做任何事。 */
+	/** Injected by index.ts (copied onto every new session via AgentService): forward
+	 *  SDK tool-execution events to plugins (PluginManager.emitToolEvent). No-op when unset. */
 	onToolEvent: ((ev: PluginToolEvent) => void) | undefined = undefined;
-	/** index.ts 注入：读取插件当前注册的 AI 工具（attach 时拷贝到每个新会话）。 */
+	/** Injected by index.ts: read AI tools currently registered by plugins (copied onto every new session at attach). */
 	pluginToolsProvider: (() => PluginAgentTool[]) | undefined = undefined;
-	/** index.ts 注入：读取插件当前注册的斜杠命令（目录展示 + prompt 拦截执行）。 */
+	/** Injected by index.ts: read slash commands currently registered by plugins (catalog display + prompt intercept). */
 	pluginCommandsProvider: (() => PluginCommandDef[]) | undefined = undefined;
-	/** index.ts 注入：读取插件注册的常驻后台任务（并入 bg_servers 面板）。 */
+	/** Injected by index.ts: read resident background tasks registered by plugins (folded into the bg_servers panel). */
 	pluginBgTasksProvider: (() => BgServer[]) | undefined = undefined;
-	/** index.ts 注入：停止插件任务（kill_background_server with taskId）。 */
+	/** Injected by index.ts: stop a plugin task (kill_background_server with taskId). */
 	pluginStopBgTask: ((taskId: string) => boolean) | undefined = undefined;
-	/** 上一轮注入会话的插件工具名集合（用于检测注销/移除）。 */
+	/** Plugin tool names injected into the session last round (used to detect unregister/remove). */
 	private appliedPluginToolNames = new Set<string>();
 
 	/** The active conversation (all session operations target it). */
@@ -567,17 +569,19 @@ export class ClientSession {
 
 	private makeTerminalManager(conversationId: string, cwd: string): TerminalManager {
 		const mgr = new TerminalManager((msg) => this.emitTerminal(conversationId, msg), cwd);
-		// 终端活力检测：AI 触碰过的终端静默 ≥ 阈值（PI_WEB_TERMINAL_IDLE_MS，
-		// 默认 15s）且该对话正在运行时，注入一条 steer 消息唤醒 AI 去检查。
+		// Terminal liveness: when a terminal the AI has touched is silent for ≥ the
+		// threshold (PI_WEB_TERMINAL_IDLE_MS, default 15s) and this conversation is
+		// running, inject a steer message so the AI goes and checks.
 		mgr.onAgentIdle = (terminalId, idleMs, title) =>
 			this.notifyTerminalIdle(conversationId, terminalId, idleMs, title);
 		return mgr;
 	}
 
-	/** 终端活力提醒：仅在该对话正在流式运行时注入（sendUserMessage 在流式中
-	 *  即 steer 语义——当前回合结算后送达，agent 立即响应）；空闲时不打扰。
-	 *  一次性语义由 TerminalManager 保证（触发后解除武装，agent 再次触碰才
-	 *  重新计时），不会反复刷屏。 */
+	/** Terminal liveness nudge: injected only while this conversation is streaming
+	 *  (sendUserMessage mid-stream is steer semantics — delivered after the current
+	 *  turn settles, the agent responds immediately); idle conversations are left alone.
+	 *  One-shot semantics are guaranteed by TerminalManager (disarmed after firing;
+	 *  the agent must touch the terminal again to restart the timer), so it will not spam. */
 	private notifyTerminalIdle(
 		conversationId: string,
 		terminalId: string,
@@ -590,19 +594,20 @@ export class ClientSession {
 		const seconds = Math.max(1, Math.round(idleMs / 1000));
 		void conv.runtime.session
 			.sendUserMessage(
-				`（系统自动提醒：你启动的终端「${title}」已连续 ${seconds} 秒没有任何新输出。` +
-					`进程可能在等待输入、卡住或已挂起。请用 terminal_read 查看它的当前状态；` +
-					`若在等交互就用 terminal_input / terminal_key 回应；确认不再需要就 terminal_close 关掉它。）`,
+				`(System: the terminal "${title}" you started has had no new output for ${seconds} seconds.` +
+					`It may be waiting for input, stuck, or hung. Use terminal_read to check;` +
+					`if it needs input, use terminal_input / terminal_key; if you are done, terminal_close it.)`,
 			)
 			.catch(() => {
-				// best effort —— 注入失败不影响终端本身
+				// best effort — a failed inject does not affect the terminal itself
 			});
 	}
 
 	/**
-	 * 终端接管的 bash 静默转后台后的完成通知：命令真正结束时主动告诉 AI。
-	 * 流式中 → sendUserMessage（steer，立即唤醒处理）；空闲时 → sendCustomMessage
-	 * nextTurn 排队（不唤醒 agent、不耗 token，下次对话自动带上）。
+	 * Completion notice after terminal-backed bash silently backgrounds: tell the AI
+	 * when the command actually finishes. Mid-stream → sendUserMessage (steer, wake
+	 * immediately); idle → sendCustomMessage nextTurn queue (does not wake the agent
+	 * or spend tokens; it rides along on the next turn).
 	 */
 	private notifyTerminalBashDone(
 		terminals: TerminalManager,
@@ -617,19 +622,19 @@ export class ClientSession {
 				tail = terminals.read(info.terminalId, Math.max(0, end - 4000))?.data ?? "";
 			}
 		} catch {
-			// 终端可能已被关闭
+			// The terminal may already have been closed
 		}
 		const exitText =
-			info.exitCode === null ? "终端已关闭" : `退出码 ${info.exitCode}`;
+			info.exitCode === null ? "terminal closed" : `exit code ${info.exitCode}`;
 		const cmdShort = info.command.length > 120 ? `${info.command.slice(0, 120)}…` : info.command;
 		const text =
-			`（系统：你之前在终端 ${info.terminalId} 后台运行的命令已结束（${exitText}）：${cmdShort}\n` +
-			`最后输出：\n${stripAnsi(tail).trim() || "（无输出）"}）`;
+			`(System: the command you left running in terminal ${info.terminalId} finished (${exitText}): ${cmdShort}\n` +
+			`Last output:\n${stripAnsi(tail).trim() || "(no output)"})`;
 		const session = conv.runtime.session;
 		if (session.isStreaming) {
 			void session.sendUserMessage(text).catch(() => {});
 		} else {
-			// 空闲时不唤醒 agent——排队为 nextTurn 上下文，下次对话自动可见。
+			// Do not wake the agent while idle — queue as nextTurn context, visible on the next conversation automatically.
 			void session
 				.sendCustomMessage({
 					customType: "terminal-bash-done",
@@ -782,7 +787,7 @@ export class ClientSession {
 			isStreaming: () => this.session.isStreaming,
 			reloadSession: async () => {
 				await this.session.reload();
-				// reload() 会把 custom 工具重新加回活跃集——重放终端开关。
+				// reload() puts custom tools back into the active set — replay the terminal toggle.
 				this.applyTerminalToolGating(this.session);
 				await this.pushSlashCommands();
 			},
@@ -869,12 +874,15 @@ export class ClientSession {
 			const services = await createAgentSessionServices({
 				cwd: effectiveCwd,
 				modelRuntime: this.sharedModelRuntime,
-				// 设置面板钩子（官方 SDK 的 resourceLoader overrides）：三个 override
-				// 在每次 resourceLoader.reload() 时重放，且读取 this.settings 的当前
-				// 值——因此 session.reload() 即可让系统提示词 / 技能 / 插件开关生效，
-				// 新对话（新 runtime）也会自动带上当前设置。
+				// Settings-panel hooks (official SDK resourceLoader overrides): the three
+				// overrides replay on every resourceLoader.reload() and read the current
+				// this.settings values — so session.reload() is enough to make the system
+				// prompt / skill / plugin toggles take effect, and a new conversation
+				// (new runtime) also picks up the current settings automatically.
 				resourceLoaderOptions: {
-					// 系统提示词：replace 模式整体替换；append 模式追加到提示词末尾。
+					additionalSkillPaths: this.extraSkillPaths(),
+					additionalPromptTemplatePaths: this.bundledPromptPaths(),
+					// System prompt: replace mode replaces the whole thing; append mode appends to the end.
 					systemPromptOverride: (base?: string) => {
 						// Remember the built-in default so the settings panel can show
 						// it when the user edits in replace mode.
@@ -893,28 +901,32 @@ export class ClientSession {
 							out.push(custom);
 						}
 						if (process.platform === "win32") {
-							// Windows 专属 persona：bash 工具跑 Git Bash 且无默认超时、终端
-							// 是交互式 TTY——注入约束避免 heredoc/交互/长驻命令挂死整个会话；
-							// GBK 老中文文件让模型改用终端按正确编码读（iconv/chcp/Get-Content）。
+							// Windows-only persona: the bash tool runs Git Bash with no default
+							// timeout, and the terminal is an interactive TTY — inject constraints
+							// so heredoc / interactive / long-running commands cannot hang the
+							// whole session. For legacy GBK Chinese files, tell the model to read
+							// via the terminal with the right encoding (iconv/chcp/Get-Content).
 							out.push(WINDOWS_PERSONA);
 						}
 						if (this.settingsSvc.current.terminalToolsEnabled !== false) {
-							// 终端工具使用引导（全平台）：告诉模型什么场景该用持久终端
-							// 而不是一次性 bash——没有这段模型几乎从不主动选终端工具。
+							// Terminal-tool usage guidance (all platforms): tell the model when to
+							// use a persistent terminal instead of one-shot bash — without this the
+							// model almost never picks the terminal tools on its own.
 							out.push(TERMINAL_TOOLS_GUIDANCE);
 						}
 						return out;
 					},
-					// 技能开关：禁用的技能从系统提示词和 /skill: 目录中剔除。
+					// Skill toggle: disabled skills are stripped from the system prompt and the /skill: catalog.
 					skillsOverride: (res) => ({
 						...res,
 						skills: res.skills.filter(
 							(s) => !this.settingsSvc.current.disabledSkills.includes(s.name),
 						),
 					}),
-					// 插件开关：禁用的扩展整个卸载（工具 / 命令随之消失）。
-					// 注意 SDK 在 extensionsOverride 之后才补 sourceInfo，包扩展此处只能靠路径
-					// 匹配 —— isExtensionDisabled 同时比对 npm:<pkg> 候选键。
+					// Plugin toggle: a disabled extension is fully unloaded (its tools / commands disappear).
+					// Note the SDK only attaches sourceInfo AFTER extensionsOverride, so package
+					// extensions can only be matched by path here — isExtensionDisabled also
+					// compares npm:<pkg> candidate keys.
 					extensionsOverride: (res) => ({
 						...res,
 						extensions: res.extensions.filter(
@@ -926,12 +938,13 @@ export class ClientSession {
 			const created = await createAgentSessionFromServices({
 				services,
 				sessionManager,
-				// 可手动停止的 bash 工具：覆盖 SDK 内置 bash（customTools 按 name
-				// 覆盖），执行时把自己的 AbortController 注册进客户端集合——
-				// abortBash() 只杀这些命令，agent run 与对话继续。
+				// Manually-stoppable bash tool: overrides the SDK built-in bash (customTools
+				// overrides by name). On execute it registers its AbortController in the client
+				// set — abortBash() kills only those commands; the agent run and conversation continue.
 				customTools: [
-					// bash 双实现动态分流：「终端接管」开启时命令跑进持久可见终端
-					// （保留 shell 状态、静默自动转后台），关闭时是原生 killable bash。
+					// Dual bash implementations, dispatched dynamically: when "terminal-backed"
+					// is on, commands run in a persistent visible terminal (shell state kept,
+					// silence auto-backgrounds); when off, native killable bash.
 					makeAdaptiveBashTool(
 						makeKillableBashTool(effectiveCwd, this.bashKills),
 						makeTerminalBashTool(terminals, {
@@ -951,12 +964,12 @@ export class ClientSession {
 						() => this.settingsSvc.current.terminalBash,
 					),
 					...makePersistentTerminalTools(terminals, effectiveCwd),
-					// 插件注册的 AI 工具（创建时刻的实时快照；后续注册经
-					// refreshPluginTools 动态补入已有会话）。
+					// Plugin-registered AI tools (live snapshot at creation time; later
+					// registrations are patched into existing sessions via refreshPluginTools).
 					...(this.pluginToolsProvider?.() ?? []).map(pluginToolToDefinition),
 				],
 			});
-			// 终端工具开关从创建起就生效（工具始终注册进注册表，只调活跃集）。
+			// The terminal-tools toggle takes effect from creation (tools stay in the registry; only the active set is adjusted).
 			this.applyTerminalToolGating(created.session);
 			return {
 				...created,
@@ -1037,7 +1050,7 @@ export class ClientSession {
 		this.pendingNotices.push({
 			type: "notice",
 			level: "warning",
-			text: `上次服务重启时有 ${list.length} 个进行中的对话被中断：${names}。可在历史对话中恢复继续。`,
+			text: `Last restart interrupted ${list.length} running conversation(s): ${names}. Resume them from history.`,
 		});
 	}
 
@@ -1060,7 +1073,7 @@ export class ClientSession {
 		// before the client asks).
 		void this.pushSlashCommands();
 		// Reconnect: push the remembered goal prefs (model choice, rounds cap,
-		// locked) so the goal bar restores them on reload — "全局记忆".
+		// locked) so the goal bar restores them on reload — "global memory".
 		this.goalSvc.emitGoalStatus();
 		// Reconnect: push the settings panel state (prompt text/mode, skill &
 		// extension toggles, saved presets).
@@ -1070,6 +1083,7 @@ export class ClientSession {
 		this.bg.push();
 		// PTYs are conversation-owned and survive a socket reconnect.
 		this.pushTerminals();
+		void this.pushReviewStatus();
 	}
 
 	detachSink(send: (msg: ServerMessage) => void): void {
@@ -1137,7 +1151,7 @@ export class ClientSession {
 					this.emit({
 						type: "notice",
 						level: "warning",
-						text: `对话「${conv.title}」已 ${mins} 分钟无任何响应，可能已失联（网络中断或服务端挂起）。可点击停止后重试。`,
+						text: `Conversation "${conv.title}" has had no response for ${mins} minute(s) and may be stalled. Stop and retry.`,
 					});
 				}
 			}
@@ -1155,14 +1169,14 @@ export class ClientSession {
 			this.emit({
 				type: "notice",
 				level: "warning",
-				text: `工具执行超过 ${Math.round(TOOL_WATCHDOG_TIMEOUT_MS / 60_000)} 分钟，已自动终止（防止挂死）。可调整超时：环境变量 PI_WEB_TOOL_TIMEOUT_MS（毫秒）。`,
+				text: `Tool ran over ${Math.round(TOOL_WATCHDOG_TIMEOUT_MS / 60_000)} minute(s) and was aborted. Override with PI_WEB_TOOL_TIMEOUT_MS (ms).`,
 			});
 			conv.toolStartTimes.delete(toolCallId);
 			// Abort the run (kills the process tree via the SDK's abort signal);
 			// agent_end will fire with stopReason "aborted" and existing logic
 			// clears any goal / review loop. interruptRun adds a force-reset
 			// fallback in case the model stream ignores the abort signal.
-			void this.interruptRun(conv, "工具执行超时");
+			void this.interruptRun(conv, "Tool timed out");
 		}, TOOL_WATCHDOG_TIMEOUT_MS);
 		t.unref?.();
 		conv.toolWatchdogs.set(toolCallId, t);
@@ -1211,7 +1225,7 @@ export class ClientSession {
 					this.bg.snapshotBefore();
 				}
 				this.armToolWatchdog(conv, event.toolCallId);
-				// 插件扩展点：工具开始执行（异常由 emitToolEvent 隔离）。
+				// Plugin extension point: tool execution started (exceptions isolated by emitToolEvent).
 				this.onToolEvent?.({ phase: "start", toolName: event.toolName, conversationId: conv.id });
 				break;
 			}
@@ -1224,7 +1238,7 @@ export class ClientSession {
 				if (event.toolName === "bash") void this.bg.trackAfterBash();
 				const durationMs =
 					startedAt !== undefined ? Date.now() - startedAt : undefined;
-				// 插件扩展点：工具结束执行（带耗时与错误标志）。
+				// Plugin extension point: tool execution ended (with duration and error flag).
 				this.onToolEvent?.({
 					phase: "end",
 					toolName: event.toolName,
@@ -1310,6 +1324,9 @@ export class ClientSession {
 				}
 				// Goal review hook lives in GoalService.onAgentEnd(conv, false).
 				this.goalSvc.onAgentEnd(conv, false);
+				if (conv.id === this.conv.id) {
+					void this.maybeNudgeReview();
+				}
 				// Deferred settings reload: settings (system prompt / skills /
 				// extensions) changed while the run was streaming — applying now
 				// would have torn down the in-flight run.
@@ -1409,7 +1426,7 @@ export class ClientSession {
 		// this timestamp (that's what resolveUserMessageEntryId() expects). n is
 		// a global per-conversation counter across ALL roles, so it can't be
 		// reused as the seq — otherwise editing anything but the first question
-		// fails to resolve ("找不到要编辑的消息").
+		// fails to resolve ("could not find the message to edit").
 		let seq = n;
 		if (m.role === "user") {
 			const ts = m.timestamp ?? 0;
@@ -1682,9 +1699,9 @@ export class ClientSession {
 
 	/** Set by index.ts: called when /pi-web-ui:quit is invoked. */
 	onQuit: (() => boolean) | undefined = undefined;
-	/** 本客户端成功切换工作区（set_cwd）后触发，参数为新绝对路径。
-	 *  attach 时由 AgentService 接到全局 onClientCwdChanged —— 编辑器等
-	 *  工作区跟随型插件借此把根目录切到用户当前项目。 */
+	/** Fired after this client successfully switches workspace (set_cwd); argument is the new absolute path.
+	 *  On attach, AgentService wires this to the global onClientCwdChanged — workspace-following
+	 *  plugins (editor, etc.) use it to point their root at the user's current project. */
 	onCwdChanged: ((abs: string) => void) | undefined = undefined;
 
 	/** Ask the npm registry for the latest pi-web-ui version and report it. */
@@ -1721,7 +1738,7 @@ export class ClientSession {
 				latest: null,
 				latestPublishedAt: null,
 				upToDate: false,
-				error: `检查更新失败：${(err as Error).message}`,
+				error: `Update check failed: ${(err as Error).message}`,
 			});
 		}
 	}
@@ -1732,7 +1749,7 @@ export class ClientSession {
 			this.emit({
 				type: "notice",
 				level: "info",
-				text: "正在安装 pi agent CLI（npm i -g @earendil-works/pi-coding-agent）…",
+				text: "Installing pi agent CLI (npm i -g @earendil-works/pi-coding-agent)…",
 			});
 			const { code, out } = await this.runAsync(
 				"npm",
@@ -1743,14 +1760,14 @@ export class ClientSession {
 				this.emit({
 					type: "notice",
 					level: "info",
-					text: "✅ pi agent CLI 安装完成。填入 API 密钥即可开始，或在终端运行 pi 完成登录。",
+					text: "pi agent CLI installed. Enter an API key to start, or run pi in a terminal to log in.",
 				});
 				this.emit({ type: "install_result", ok: true, detail: "" });
 			} else {
 				this.emit({
 					type: "notice",
 					level: "error",
-					text: `pi agent 安装失败（${code ?? "timeout"}）：${out.slice(0, 400)}`,
+					text: `pi agent install failed (${code ?? "timeout"}): ${out.slice(0, 400)}`,
 				});
 				this.emit({
 					type: "install_result",
@@ -1762,7 +1779,7 @@ export class ClientSession {
 			this.emit({
 				type: "notice",
 				level: "error",
-				text: `pi agent 安装失败：${(err as Error).message}`,
+				text: `pi agent install failed: ${(err as Error).message}`,
 			});
 		}
 		this.flushSnapshot();
@@ -1795,8 +1812,8 @@ export class ClientSession {
 		}, interval);
 	}
 
-	/** Slash-command catalog + native command execution — 自包含模块，见
-	 *  slash-commands.ts（内置命令拦截 + 扩展/模板/技能目录推送）。 */
+	/** Slash-command catalog + native command execution — self-contained module, see
+	 *  slash-commands.ts (built-in intercept + extension/template/skill catalog push). */
 	private readonly slash = new SlashCommandsService({
 		emit: (msg) => this.emit(msg),
 		cwd: () => this.cwd,
@@ -1807,13 +1824,16 @@ export class ClientSession {
 		setThinking: (level) => this.setThinking(level),
 		refreshSessions: () => this.refreshSessions(),
 		afterReload: () => this.applyTerminalToolGating(this.session),
+		setSessionName: (name) => this.setSessionName(name),
+		emitSessionTree: () => this.emitSessionTree(),
+		exportSession: () => this.exportSession(),
 		pluginCommands: () => this.pluginCommandsProvider?.() ?? [],
 		execPluginCommand: async (name, args) => {
 			const def = this.pluginCommandsProvider?.().find((c) => c.name === name);
 			if (!def) return false;
 			try {
 				const result = await def.run(args, { clientId: this.clientId });
-				// 字符串返回值 → 通知条回显给发起人；富展示用 broadcast/sendTo。
+				// A string return → echoed to the initiator as a notice; use broadcast/sendTo for rich display.
 				if (typeof result === "string" && result.trim()) {
 					this.emit({ type: "notice", level: "info", text: result });
 				}
@@ -1821,7 +1841,7 @@ export class ClientSession {
 				this.emit({
 					type: "notice",
 					level: "error",
-					text: `插件命令 /${name} 执行失败：${(err as Error).message}`,
+					text: `Plugin command /${name} failed: ${(err as Error).message}`,
 				});
 			}
 			return true;
@@ -1829,12 +1849,12 @@ export class ClientSession {
 		onQuit: () => this.onQuit?.() ?? false,
 	});
 
-	/** Catalog push — index.ts get_commands / attach / cwd 切换等都会调用。 */
+	/** Catalog push — called from index.ts get_commands / attach / cwd switch, etc. */
 	pushSlashCommands(): Promise<void> {
 		return this.slash.push();
 	}
 
-	/** 模型/服务商配置管理 —— 自包含模块，见 model-admin.ts。 */
+	/** Model / provider config management — self-contained module, see model-admin.ts. */
 	private readonly modelAdmin!: ModelAdminService;
 
 	/** Persist an api-key credential for a provider (auth.json). */
@@ -1910,6 +1930,7 @@ export class ClientSession {
 		reviewPrompt?: string;
 		reviewDisabledSkills?: string[];
 		disabledPlugins?: string[];
+		additionalSkillPaths?: string[];
 	}): Promise<void> {
 		await this.settingsSvc.set(partial);
 	}
@@ -1929,14 +1950,15 @@ export class ClientSession {
 		return this.settingsSvc.deletePreset(name);
 	}
 
-		/** Make settings effective in the running runtime（流式中则延迟到 agent_end）。 */
+		/** Make settings effective in the running runtime (deferred to agent_end if currently streaming). */
 	private async applyRuntimeSettings(): Promise<void> {
 		return this.settingsSvc.applyRuntime();
 	}
 
-	/** 把终端工具开关应用到 session 的活跃工具集：关闭时从活跃集中剔除
-	 *  terminal_*（工具仍留在注册表，重开时可直接加回）。session.reload() 与新
-	 *  会话创建都会把 custom 工具加回活跃集，所以这两条路径之后都要重放本方法。 */
+	/** Apply the terminal-tools toggle to the session's active tool set: when off,
+	 *  strip terminal_* from the active set (tools stay in the registry and can be
+	 *  added back on re-enable). session.reload() and new-session creation both put
+	 *  custom tools back into the active set, so this method must be replayed after both. */
 	private applyTerminalToolGating(session: AgentSession): void {
 		try {
 			const enabled = this.settingsSvc.current.terminalToolsEnabled !== false;
@@ -1947,12 +1969,12 @@ export class ClientSession {
 			}
 			session.setActiveToolsByName([...names]);
 		} catch {
-			// Session 未就绪——下次创建/reload 会再应用。
+			// Session not ready — will be applied again on next create/reload.
 		}
 	}
 
-	/** 把插件 AI 工具同步进一个已存在的会话（新增/更新/移除）。
-	 *  实际 diff 逻辑在 plugins.ts 的 syncPluginToolsIntoSession（可单测）。 */
+	/** Sync plugin AI tools into an existing session (add/update/remove).
+	 *  The actual diff lives in plugins.ts syncPluginToolsIntoSession (unit-testable). */
 	private syncPluginTools(session: AgentSession): void {
 		try {
 			const defs = (this.pluginToolsProvider?.() ?? []).map(pluginToolToDefinition);
@@ -1967,13 +1989,13 @@ export class ClientSession {
 		}
 	}
 
-	/** index.ts 经 pluginMgr.onAgentToolsChanged 触发：把插件 AI 工具推入全部会话。 */
+	/** Triggered by index.ts via pluginMgr.onAgentToolsChanged: push plugin AI tools into every session. */
 	refreshPluginTools(): void {
 		for (const conv of this.convs.values()) this.syncPluginTools(conv.session);
 	}
 
 	private async applySettingsReload(): Promise<void> {
-		// 兼容旧入口：reload + 刷目录在宿主回调里完成
+		// Compat with the old entry: reload + catalog refresh happen in the host callback
 		return this.settingsSvc.applyRuntime();
 	}
 
@@ -1991,7 +2013,7 @@ export class ClientSession {
 		this.emit({
 			type: "notice",
 			level: "error",
-			text: "服务器正在排空存量工作（quiesce），已拒绝新的对话/消息/编辑。存量运行会继续跑完；用 pi-web-ui server unquiesce 可恢复。",
+			text: "Server is draining (quiesce): new chats/messages/edits are refused. In-flight work will finish. Run pi-web-ui server unquiesce to reopen.",
 		});
 		this.flushSnapshot();
 		return true;
@@ -2035,7 +2057,7 @@ export class ClientSession {
 		}[],
 		/**
 		 * true = followUp: while streaming, queue the prompt and deliver it only
-		 * after the WHOLE run finishes (补充 button — "AI 生成结束才发送").
+		 * after the WHOLE run finishes (supplement button — "send only after AI generation ends").
 		 * false/undefined = steer: the pi CLI Enter semantic — injected right
 		 * after the current turn settles, skipping remaining planned tool calls.
 		 */
@@ -2071,7 +2093,7 @@ export class ClientSession {
 				await s.sendCustomMessage(aside.message, { deliverAs: "nextTurn" });
 			}
 			if (s.isStreaming) {
-				// queue=true (补充 button) → followUp: the message is delivered only
+				// queue=true (supplement button) → followUp: the message is delivered only
 				// after the whole run finishes — the agent finishes what it started,
 				// then responds to the queued message. queue=false/undefined
 				// (plain Enter) → steer: interrupts the current run — the message
@@ -2091,7 +2113,7 @@ export class ClientSession {
 			this.emit({
 				type: "notice",
 				level: "error",
-				text: `提示发送失败：${(err as Error).message}`,
+				text: `Failed to send prompt: ${(err as Error).message}`,
 			});
 		}
 		// Name the conversation after its first user prompt.
@@ -2127,7 +2149,7 @@ export class ClientSession {
 	 */
 
 	/**
-	 * Hard-abort the running agent (Stop button / global 中断). Tries
+	 * Hard-abort the running agent (Stop button / global interrupt). Tries
 	 * session.abort() first; if the run is not idle within
 	 * HARD_ABORT_TIMEOUT_MS (model stream ignoring the abort signal), the
 	 * conversation's runtime is force-disposed and recreated from the last
@@ -2135,9 +2157,10 @@ export class ClientSession {
 	 * overnight. The notice fires only on the forced-reset path.
 	 */
 	async abort(): Promise<void> {
-		// 只停止智能体运行本身；AI 在后台启动的服务由「后台任务」面板单独
-		// 管理（可逐个停止或全部关闭），不会在停止对话时被连带杀掉。
-		await this.interruptRun(this.conv, "已停止");
+		// Stop only the agent run itself; services the AI started in the background
+		// are managed separately by the background-tasks panel (stop one or all) and
+		// are not killed as a side effect of stopping the conversation.
+		await this.interruptRun(this.conv, "Stopped");
 		this.flushSnapshot();
 	}
 
@@ -2146,12 +2169,12 @@ export class ClientSession {
 		await this.bg.listAndPush();
 	}
 
-	/** 插件任务集合变化时由宿主调用：重推一次 bg_servers（含插件任务）。 */
+	/** Called by the host when the plugin-task set changes: re-push bg_servers (including plugin tasks). */
 	refreshBgTasks(): void {
 		this.bg.push();
 	}
 
-	/** 插件设置保存结果等需要从 index.ts 发 notice 时用（emit 是私有的）。 */
+	/** Used when index.ts needs to send a notice (plugin-settings save result, etc.; emit is private). */
 	emitNotice(level: "info" | "warning" | "error", text: string): void {
 		this.emit({ type: "notice", level, text });
 	}
@@ -2160,13 +2183,13 @@ export class ClientSession {
 	/** Kill ONE background server (by port) OR a plugin task (by taskId). */
 	async killBackgroundServer(port: number | undefined, taskId?: string): Promise<boolean> {
 		if (taskId) {
-			// 插件任务：交给插件管理器 stop 回调（不杀进程树——任务在宿主进程内）。
+			// Plugin task: hand to the plugin manager's stop callback (do not kill a process tree — the task lives in the host process).
 			const ok = this.pluginStopBgTask?.(taskId) ?? false;
 			if (!ok) {
 				this.emit({
 					type: "notice",
 					level: "info",
-					text: `后台任务「${taskId}」不存在或已结束`,
+					text: `Background task "${taskId}" is missing or already stopped`,
 				});
 			}
 			this.bg.push();
@@ -2191,7 +2214,7 @@ export class ClientSession {
 			this.emit({
 				type: "notice",
 				level: "info",
-				text: "当前没有正在运行的 bash 命令",
+				text: "No bash command is running",
 			});
 			this.flushSnapshot();
 			return;
@@ -2200,17 +2223,17 @@ export class ClientSession {
 		this.emit({
 			type: "notice",
 			level: "info",
-			text: "已停止 bash 命令（对话继续）",
+			text: "Stopped the bash command (conversation continues)",
 		});
-		// 让 AI 明确知道是用户手动停止：sendUserMessage 触发下一轮，agent
-		// 会看到「命令被用户中止」而不是普通失败，并据此继续（不会困惑于
-		// 为什么命令失败了）。
+		// Make it explicit to the AI that the user stopped it: sendUserMessage
+		// kicks the next turn; the agent sees "command aborted by the user" rather
+		// than a generic failure and continues from there (instead of wondering why the command failed).
 		try {
 			await this.conv.runtime.session.sendUserMessage(
-				"（系统：用户手动停止了刚才的 bash 命令——命令被中止，终止前已输出的内容在对应工具结果里。请据此继续，不要重跑被中止的命令，除非确实必要。）",
+				"(System: the user stopped the bash command. Output up to abort is in the tool result. Continue from that; do not rerun it unless necessary.)",
 			);
 		} catch {
-			// best effort — 消息注入失败不影响命令已停止的事实
+			// best effort — a failed message inject does not change the fact that the command was stopped
 		}
 		this.flushSnapshot();
 	}
@@ -2221,7 +2244,7 @@ export class ClientSession {
 		// session.abort() can return without stopping anything when the run is
 		// stuck before the agent even started (e.g. a model stream that never
 		// begins), so we watch for agent_end and force-reset when it never
-		// comes — abort 卡住（超时）或空转（结算窗口）两条路都覆盖。
+		// comes — covers both abort stuck (timeout) and spinning (settle window).
 		let ended = false;
 		let forced = false;
 		const off = conv.session.subscribe((e) => {
@@ -2234,7 +2257,7 @@ export class ClientSession {
 			forced = true;
 			void this.forceResetConversation(
 				conv,
-				`${reason}：运行未终止，已强制重置当前对话`,
+				`${reason}: run did not stop, forced a reset of this conversation`,
 			);
 		};
 		// 1) abort itself hangs (model stream ignores the signal) → hard kill.
@@ -2250,7 +2273,7 @@ export class ClientSession {
 			this.emit({
 				type: "notice",
 				level: "error",
-				text: `中止失败：${(err as Error).message}`,
+				text: `Abort failed: ${(err as Error).message}`,
 			});
 		}
 		// 3) abort returned but no agent_end within the settle window → the
@@ -2292,7 +2315,7 @@ export class ClientSession {
 			this.emit({
 				type: "notice",
 				level: "error",
-				text: `强制中断失败：${(err as Error).message}`,
+				text: `Force-interrupt failed: ${(err as Error).message}`,
 			});
 		}
 	}
@@ -2334,7 +2357,7 @@ export class ClientSession {
 			this.emit({
 				type: "notice",
 				level: "warning",
-				text: `当前项目运行的对话已达上限（${MAX_OPEN_CONVERSATIONS} 个），请先打开某个对话并离开（不继续对话）以移出列表`,
+				text: `This project already has ${MAX_OPEN_CONVERSATIONS} running conversations. Open one and leave it (without prompting) to free a slot`,
 			});
 			return;
 		}
@@ -2380,7 +2403,7 @@ export class ClientSession {
 			this.emit({
 				type: "notice",
 				level: "error",
-				text: `新建对话失败：${(err as Error).message}`,
+				text: `Failed to create chat: ${(err as Error).message}`,
 			});
 		}
 		this.flushSnapshot();
@@ -2542,7 +2565,7 @@ export class ClientSession {
 				this.emit({
 					type: "notice",
 					level: "error",
-					text: "只能删除会话目录中的对话记录",
+					text: "Can only delete session files inside the sessions directory",
 				});
 				return;
 			}
@@ -2552,7 +2575,7 @@ export class ClientSession {
 					this.emit({
 						type: "notice",
 						level: "warning",
-						text: "该对话正在使用中，请先切换到其他对话再删除",
+						text: "That conversation is in use; switch away before deleting",
 					});
 					return;
 				}
@@ -2563,7 +2586,7 @@ export class ClientSession {
 			this.emit({
 				type: "notice",
 				level: "error",
-				text: `删除会话失败：${(err as Error).message}`,
+				text: `Failed to delete session: ${(err as Error).message}`,
 			});
 		}
 	}
@@ -2589,7 +2612,7 @@ export class ClientSession {
 			this.emit({
 				type: "notice",
 				level: "error",
-				text: `切换会话失败：${(err as Error).message}`,
+				text: `Failed to switch session: ${(err as Error).message}`,
 			});
 		}
 		this.flushSnapshot();
@@ -2642,7 +2665,7 @@ export class ClientSession {
 			this.emit({
 				type: "notice",
 				level: "warning",
-				text: "编辑内容为空，已取消",
+				text: "Edit was empty, cancelled",
 			});
 			this.flushSnapshot();
 			return;
@@ -2652,7 +2675,7 @@ export class ClientSession {
 			this.emit({
 				type: "notice",
 				level: "error",
-				text: "找不到要编辑的消息（可能已被压缩或不在当前分支）",
+				text: "Cannot find that message to edit (compacted or not on this branch)",
 			});
 			this.flushSnapshot();
 			return;
@@ -2666,7 +2689,7 @@ export class ClientSession {
 				this.emit({
 					type: "notice",
 					level: "info",
-					text: "已取消编辑重问",
+					text: "Cancelled edit & re-ask",
 				});
 				this.flushSnapshot();
 				return;
@@ -2684,13 +2707,13 @@ export class ClientSession {
 			this.emit({
 				type: "notice",
 				level: "info",
-				text: "已从该问题重新提问（原对话保留在会话列表中）",
+				text: "Re-asked from that question (original conversation stays in the list)",
 			});
 		} catch (err) {
 			this.emit({
 				type: "notice",
 				level: "error",
-				text: `编辑重问失败：${(err as Error).message}`,
+				text: `Edit & re-ask failed: ${(err as Error).message}`,
 			});
 		}
 		this.flushSnapshot();
@@ -2736,18 +2759,190 @@ export class ClientSession {
 		return this.files.listFiles(relPath);
 	}
 
-	/** 全局搜索：递归文件名匹配（结果经 search_files_result 回推，reqId 匹配）。 */
+	/** Global search: recursive filename match (results pushed back as search_files_result, matched by reqId). */
 	async searchFiles(query: string, reqId: number): Promise<void> {
 		return this.files.searchFiles(query, reqId);
 	}
 
-	/** SCM 只读查询（结构化 JSON，reqId 匹配）。 */
+	/** Read-only SCM query (structured JSON, matched by reqId). */
 	async scmQuery(
 		kind: "status" | "history" | "filediff" | "commit",
 		reqId: number,
 		arg?: { path?: string; hash?: string },
 	): Promise<void> {
 		return this.files.scmQuery(kind, reqId, arg);
+	}
+
+	/** Local Review: parsed working-tree / branch diff for line comments. */
+	async reviewDiff(reqId: number, mode?: string, base?: string): Promise<void> {
+		const { emitReviewDiff } = await import("./review/wire.js");
+		return emitReviewDiff(this.cwd, reqId, mode, base, (msg) => this.emit(msg));
+	}
+
+	/** Local Review: persist line comments under .local-review/. */
+	async reviewSubmit(
+		reqId: number,
+		mode: string | undefined,
+		baseBranch: string | undefined,
+		comments: import("./review/types.js").ReviewComment[],
+	): Promise<void> {
+		const { emitReviewSubmit } = await import("./review/wire.js");
+		return emitReviewSubmit(this.cwd, reqId, mode, baseBranch, comments, (msg) => this.emit(msg));
+	}
+
+	async reviewSetStatus(
+		status: "applied" | "dismissed",
+		id?: string,
+	): Promise<void> {
+		const { emitReviewSetStatus } = await import("./review/wire.js");
+		return emitReviewSetStatus(this.cwd, status, id, (msg) => this.emit(msg));
+	}
+
+	async pushReviewStatus(): Promise<void> {
+		try {
+			const { pendingReviewSummary } = await import("./review/review.js");
+			const summary = await pendingReviewSummary(this.cwd);
+			this.emit({
+				type: "review_status",
+				pending: summary.pending,
+				commentCount: summary.commentCount,
+			});
+		} catch {
+			this.emit({ type: "review_status", pending: [], commentCount: 0 });
+		}
+	}
+
+	/** Inject pending review comments into the current conversation and run. */
+	async reviewApply(): Promise<void> {
+		if (this.quiesceBlocked()) return;
+		try {
+			const { applyPendingPrompt, pendingReviewsMarkdown } = await import("./review/review.js");
+			const markdown = await pendingReviewsMarkdown(this.cwd);
+			if (markdown.startsWith("No pending Local Review")) {
+				this.emit({ type: "notice", level: "info", text: "No pending Local Review comments." });
+				return;
+			}
+			await this.prompt(applyPendingPrompt(markdown));
+		} catch (err) {
+			this.emit({
+				type: "notice",
+				level: "error",
+				text: `Failed to apply Local Review: ${(err as Error).message}`,
+			});
+		}
+	}
+
+	private async maybeNudgeReview(): Promise<void> {
+		try {
+			const { pendingReviewSummary } = await import("./review/review.js");
+			const summary = await pendingReviewSummary(this.cwd);
+			// The pending-review chip already covers this workspace.
+			if (summary.pending.length > 0) return;
+			const { isWorkingTreeDirty } = await import("./review/git.js");
+			if (await isWorkingTreeDirty(this.cwd)) {
+				this.emit({ type: "review_nudge" });
+			}
+		} catch {
+			/* not a git repo or git missing */
+		}
+	}
+
+	setSessionName(name: string): void {
+		try {
+			this.session.setSessionName(name);
+			void this.refreshSessions();
+			this.emit({ type: "notice", level: "info", text: `Session named: ${name}` });
+		} catch (err) {
+			this.emit({
+				type: "notice",
+				level: "error",
+				text: `Failed to name session: ${(err as Error).message}`,
+			});
+		}
+	}
+
+	emitSessionTree(): void {
+		try {
+			const leafId = this.session.sessionManager.getLeafId();
+			const items = this.session.getUserMessagesForForking().map((m) => ({
+				entryId: m.entryId,
+				text: m.text.trim().slice(0, 200) || "(empty)",
+				current: m.entryId === leafId,
+			}));
+			this.emit({ type: "session_tree_data", leafId, items });
+		} catch (err) {
+			this.emit({
+				type: "notice",
+				level: "error",
+				text: `Failed to read session tree: ${(err as Error).message}`,
+			});
+		}
+	}
+
+	async navigateTree(entryId: string): Promise<void> {
+		if (this.quiesceBlocked()) return;
+		try {
+			await this.session.navigateTree(entryId);
+			this.flushSnapshot();
+			void this.refreshSessions();
+			this.emit({ type: "notice", level: "info", text: "Jumped to that question; later replies will fork from here." });
+		} catch (err) {
+			this.emit({
+				type: "notice",
+				level: "error",
+				text: `Failed to jump in the session tree: ${(err as Error).message}`,
+			});
+		}
+	}
+
+	async exportSession(): Promise<void> {
+		try {
+			const path = await this.session.exportToHtml();
+			this.emit({ type: "notice", level: "info", text: `Exported session: ${path}` });
+		} catch (err) {
+			this.emit({
+				type: "notice",
+				level: "error",
+				text: `Failed to export session: ${(err as Error).message}`,
+			});
+		}
+	}
+
+	private bundledPromptPaths(): string[] {
+		const root = this.pkgRoot();
+		const dir = join(root, "prompts");
+		return existsSync(dir) ? [dir] : [];
+	}
+
+	private extraSkillPaths(): string[] {
+		const root = this.pkgRoot();
+		const home = homedir();
+		const candidates = [
+			join(root, "skills"),
+			join(home, ".claude", "skills"),
+			join(home, ".agents", "skills"),
+			join(home, ".cursor", "skills"),
+			...(this.settingsSvc.current.additionalSkillPaths ?? []),
+		];
+		const seen = new Set<string>();
+		const out: string[] = [];
+		for (const p of candidates) {
+			const abs = resolve(p);
+			if (seen.has(abs) || !existsSync(abs)) continue;
+			seen.add(abs);
+			out.push(abs);
+		}
+		return out;
+	}
+
+	private pkgRoot(): string {
+		if (process.env.PI_WEB_PKG_ROOT) return process.env.PI_WEB_PKG_ROOT;
+		let dir = dirname(fileURLToPath(import.meta.url));
+		for (let i = 0; i < 5; i += 1) {
+			if (existsSync(join(dir, "package.json"))) return dir;
+			dir = dirname(dir);
+		}
+		return dirname(fileURLToPath(import.meta.url));
 	}
 
 	/** Read a workspace file for the preview panel (size-capped, binary-safe). */
@@ -2767,7 +2962,7 @@ export class ClientSession {
 			this.emit({
 				type: "notice",
 				level: "error",
-				text: `切换模型失败：${(err as Error).message}`,
+				text: `Failed to switch model: ${(err as Error).message}`,
 			});
 		}
 		this.flushSnapshot();
@@ -2789,13 +2984,13 @@ export class ClientSession {
 			const abs = resolve(newCwd);
 			const st = await fs.stat(abs);
 			if (!st.isDirectory()) {
-				throw new Error("路径不是目录");
+				throw new Error("Path is not a directory");
 			}
 			if (abs === this.cwd) {
 				this.emit({
 					type: "notice",
 					level: "info",
-					text: `已在工作目录：${abs}`,
+					text: `Already in workspace: ${abs}`,
 				});
 				this.flushSnapshot();
 				return;
@@ -2850,11 +3045,11 @@ export class ClientSession {
 			this.conv.promptedSinceActive = false;
 			this.conv.lastActiveAt = Date.now();
 			this.cwd = abs;
-			// 工作区跟随型插件（编辑器文件树等）同步切根。
+			// Workspace-following plugins (editor file tree, etc.) switch roots in sync.
 			try {
 				this.onCwdChanged?.(abs);
 			} catch {
-				/* 钩子异常不影响主流程 */
+				/* a hook exception must not affect the main flow */
 			}
 			// Remember the new workspace (restore target + recent-project entry).
 			this.stateStore.remember(this.clientId, abs);
@@ -2867,17 +3062,18 @@ export class ClientSession {
 			this.emit({
 				type: "notice",
 				level: "info",
-				text: `已切换到工作目录：${abs}`,
+				text: `Switched workspace to: ${abs}`,
 			});
 			void this.refreshSessions();
 			void this.listFiles(undefined);
 			// Commands are per-project (.pi/commands.json in the current cwd).
 			void this.listCommands();
+			void this.pushReviewStatus();
 		} catch (err) {
 			this.emit({
 				type: "notice",
 				level: "error",
-				text: `切换工作目录失败：${(err as Error).message}`,
+				text: `Failed to switch workspace: ${(err as Error).message}`,
 			});
 		}
 		this.flushSnapshot();
@@ -2900,7 +3096,7 @@ export class ClientSession {
 			this.emit({
 				type: "notice",
 				level: "error",
-				text: `获取模型列表失败：${(err as Error).message}`,
+				text: `Failed to list models: ${(err as Error).message}`,
 			});
 		}
 	}
@@ -2968,18 +3164,18 @@ export class ClientSession {
 			const mr = this.runtime.services.modelRuntime;
 			const slash = modelId.indexOf("/");
 			if (slash <= 0 || slash === modelId.length - 1) {
-				throw new Error(`无效的模型 ID：${modelId}`);
+				throw new Error(`Invalid model ID: ${modelId}`);
 			}
 			const provider = modelId.slice(0, slash);
 			const id = modelId.slice(slash + 1);
 			const model = mr.getModel(provider, id);
-			if (!model) throw new Error(`模型不存在：${modelId}`);
+			if (!model) throw new Error(`Model not found: ${modelId}`);
 			await this.session.setModel(model);
 		} catch (err) {
 			this.emit({
 				type: "notice",
 				level: "error",
-				text: `切换模型失败：${(err as Error).message}`,
+				text: `Failed to switch model: ${(err as Error).message}`,
 			});
 		}
 		this.flushSnapshot();
@@ -2995,7 +3191,7 @@ export class ClientSession {
 			this.emit({
 				type: "notice",
 				level: "error",
-				text: `切换思考强度失败：${(err as Error).message}`,
+				text: `Failed to set thinking level: ${(err as Error).message}`,
 			});
 		}
 		this.flushSnapshot();
@@ -3008,7 +3204,7 @@ export class ClientSession {
 			this.emit({
 				type: "notice",
 				level: "error",
-				text: `切换思考强度失败：${(err as Error).message}`,
+				text: `Failed to set thinking level: ${(err as Error).message}`,
 			});
 		}
 		this.flushSnapshot();
@@ -3031,7 +3227,7 @@ export class ClientSession {
 			return;
 		}
 		this.emit({ type: "commands", commands, path });
-		this.emit({ type: "notice", level: "info", text: `命令已保存：${path}` });
+		this.emit({ type: "notice", level: "info", text: `Commands saved: ${path}` });
 	}
 
 	async dispose(): Promise<void> {
@@ -3070,15 +3266,15 @@ export class ClientSession {
 }
 
 export class AgentService {
-		/** index.ts 注入：SDK 工具执行事件的插件转发钩子，attach 时拷贝到每个新会话。 */
+		/** Injected by index.ts: plugin-forwarding hook for SDK tool-execution events; copied onto every new session at attach. */
 	onToolEvent: ((ev: PluginToolEvent) => void) | undefined = undefined;
-	/** index.ts 注入：读取插件当前注册的 AI 工具（attach 时拷贝到每个新会话）。 */
+	/** Injected by index.ts: read AI tools currently registered by plugins (copied onto every new session at attach). */
 	pluginToolsProvider: (() => PluginAgentTool[]) | undefined = undefined;
-	/** index.ts 注入：读取插件当前注册的斜杠命令（attach 时拷贝到每个新会话）。 */
+	/** Injected by index.ts: read slash commands currently registered by plugins (copied onto every new session at attach). */
 	pluginCommandsProvider: (() => PluginCommandDef[]) | undefined = undefined;
-	/** index.ts 注入：读取插件注册的常驻后台任务（并入 bg_servers 面板）。 */
+	/** Injected by index.ts: read resident background tasks registered by plugins (folded into the bg_servers panel). */
 	pluginBgTasksProvider: (() => BgServer[]) | undefined = undefined;
-	/** index.ts 注入：停止插件任务（kill_background_server with taskId）。 */
+	/** Injected by index.ts: stop a plugin task (kill_background_server with taskId). */
 	pluginStopBgTask: ((taskId: string) => boolean) | undefined = undefined;
 	private clients = new Map<string, ClientSession>();
 	/** Quiesce (draining) state — the service refuses NEW work (prompts, forks,
@@ -3094,8 +3290,8 @@ export class AgentService {
 	private stateStore: ClientStateStore;
 	/** Set by index.ts: called when /pi-web-ui:quit is invoked. */
 	onQuit: (() => boolean) | undefined = undefined;
-	/** 任意客户端成功切换工作区后触发（新绝对路径）。index.ts 接到
-	 *  PluginManager.notifyCwd，让插件宿主的 host.cwd 实时跟随当前项目。 */
+	/** Fired after any client successfully switches workspace (new absolute path).
+	 *  index.ts wires PluginManager.notifyCwd so the plugin host's host.cwd follows the current project live. */
 	onClientCwdChanged: ((cwd: string) => void) | undefined = undefined;
 
 	constructor(
@@ -3191,7 +3387,7 @@ export class AgentService {
 				// clients are refused — index.ts closes their socket (4403) and the
 				// browser reconnect loop retries after admission reopens.
 				if (this.quiesced) {
-					throw new QuiesceRejectedError("新连接被拒绝，请等服务器恢复后重试");
+					throw new QuiesceRejectedError("New connections are refused until the server unquiesces");
 				}
 				// otherwise fall back to the server's configured default cwd.
 				let cwd = this.cwd;
@@ -3220,7 +3416,7 @@ export class AgentService {
 					send({
 						type: "notice",
 						level: "info",
-						text: `已恢复上次的工作目录：${cwd}`,
+						text: `Restored last workspace: ${cwd}`,
 					});
 				}
 			}
@@ -3238,24 +3434,30 @@ export class AgentService {
 		cs.pluginBgTasksProvider = this.pluginBgTasksProvider;
 		cs.pluginStopBgTask = this.pluginStopBgTask;
 		cs.isQuiesced = () => this.quiesced;
-		// 插件宿主工作区跟随：初次接入也同步一次（恢复的 lastCwd 可能≠服务启动目录），
-		// notifyCwd 幂等去重；此后 set_cwd 成功时由 cs.onCwdChanged 继续驱动。
+		// Plugin-host workspace follow: also sync once on first attach (restored lastCwd
+		// may ≠ the server start directory). notifyCwd is idempotent; later successful
+		// set_cwd continues to drive via cs.onCwdChanged.
 		cs.onCwdChanged = (abs) => this.onClientCwdChanged?.(abs);
 		this.onClientCwdChanged?.(cs.cwd);
 		return cs;
 	}
 
-	/** 插件 AI 工具集合变化（注册/注销）时由 index.ts 触发：推送到所有客户端的全部会话。 */
+	/** Triggered by index.ts when the plugin AI-tool set changes (register/unregister): push into every session of every client. */
 	applyPluginAgentTools(): void {
 		for (const cs of this.clients.values()) cs.refreshPluginTools();
 	}
 
-	/** 插件斜杠命令集合变化时由 index.ts 触发：重推各客户端的命令目录。 */
+	/** Triggered by index.ts when the plugin slash-command set changes: re-push each client's command catalog. */
 	applyPluginCommandCatalog(): void {
 		for (const cs of this.clients.values()) void cs.pushSlashCommands();
 	}
 
-	/** 插件常驻后台任务变化时由 index.ts 触发：重推各客户端的 bg_servers。 */
+	/** After local_review_mark_applied, refresh the pending-review chip. */
+	broadcastReviewStatus(): void {
+		for (const cs of this.clients.values()) void cs.pushReviewStatus();
+	}
+
+	/** Triggered by index.ts when plugin resident background tasks change: re-push each client's bg_servers. */
 	refreshBackgroundServers(): void {
 		for (const cs of this.clients.values()) cs.refreshBgTasks();
 	}

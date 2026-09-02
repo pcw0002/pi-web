@@ -1,9 +1,9 @@
 /**
- * Files service — 从 agent-service.ts 抽出（文件树列目录 / 预览读写 / 路径补全 /
- * SCM 只读查询 / 目录与 git-dir watcher）。
+ * Files service — extracted from agent-service.ts (file-tree listing / preview
+ * read-write / path completion / read-only SCM queries / directory and git-dir watchers).
  *
- * 全部为无状态 fs 操作 + 两个自持的 watcher（当前列出目录、git dir），
- * 经 FilesHost 回调与 ClientSession 解耦。
+ * Stateless fs operations plus two self-held watchers (currently listed directory,
+ * git dir), decoupled from ClientSession via FilesHost callbacks.
  */
 import { statSync, writeFileSync, watch } from "node:fs";
 import { resolve, relative, sep } from "node:path";
@@ -25,7 +25,7 @@ import {
 } from "./scm.js";
 
 export const IS_WIN32 = process.platform === "win32";
-/** 预览只读文件前 512KB。 */
+/** Preview reads only the first 512KB of a file. */
 export const MAX_PREVIEW_BYTES = 512 * 1024;
 
 // mac/linux: hide build & dependency noise (original behavior).
@@ -50,7 +50,7 @@ const IGNORED_ENTRIES = new Set([
 // Windows: the file tree is the primary way to navigate a project, so only
 // hide what would flood or destabilize the panel (dependency trees, VCS
 // internals, session data) plus pure junk. Build output (dist/.next/…) and
-// local env dirs (venv/__pycache__/…) stay visible — "所有文件可查看".
+// local env dirs (venv/__pycache__/…) stay visible — "every file is viewable".
 const IGNORED_ENTRIES_WIN = new Set([
 	"node_modules",
 	".git",
@@ -154,18 +154,18 @@ async function readDirForUI(
 	return { entries: out, truncated };
 }
 
-/** ClientSession 提供给本服务的宿主能力。 */
+/** Host capabilities ClientSession provides to this service. */
 export interface FilesHost {
 	emit: (msg: ServerMessage) => void;
 	isDisposed: () => boolean;
-	/** 文件面板 / 预览读写 / 补全的工作区根（服务启动 cwd 或会话 cwd）。 */
+	/** Workspace root for the file panel / preview R/W / completion (server-start cwd or session cwd). */
 	getCwd: () => string;
-	/** SCM 查询的工作区（当前活动对话所属项目，可能与 getCwd 不同）。 */
+	/** Workspace for SCM queries (the project of the active conversation; may differ from getCwd). */
 	getActiveCwd: () => string;
 }
 
 export class FilesService {
-	// ---- 当前列出目录的 watcher ----
+	// ---- watcher for the currently listed directory ----
 	private fsWatcher: ReturnType<typeof watch> | null = null;
 	private watchPath: string | null = null;
 	private watchTimer: ReturnType<typeof setTimeout> | null = null;
@@ -174,7 +174,7 @@ export class FilesService {
 	 *  directory file_changed should refresh. */
 	private recursiveWatcher = false;
 	private watchRoot: string | null = null;
-	/** 已对哪个工作区根提示过「实时监听不可用，已回落轮询」——只提示一次。 */
+	/** Workspace roots already notified that "live watching is unavailable, fell back to polling" — once per root. */
 	private degradedNoticedFor: string | null = null;
 	// ---- git dir watcher ----
 	private gitWatcher: ReturnType<typeof watch> | null = null;
@@ -192,7 +192,7 @@ export class FilesService {
 			this.host.emit({
 				type: "notice",
 				level: "warning",
-				text: `路径超出工作区：${relPath ?? ""}`,
+				text: `Path is outside the workspace: ${relPath ?? ""}`,
 			});
 			return;
 		}
@@ -209,7 +209,7 @@ export class FilesService {
 			this.host.emit({
 				type: "notice",
 				level: "warning",
-				text: `目录不可读：${error}`,
+				text: `Directory is not readable: ${error}`,
 			});
 		}
 		this.host.emit({
@@ -334,7 +334,7 @@ export class FilesService {
 				// from our own listing, and execFile passes args verbatim anyway).
 				const { resolve, relative } = await import("node:path");
 				const rel = relative(resolve(cwd), resolve(cwd, arg.path));
-				if (rel.startsWith("..") || rel === "") throw new Error("路径超出工作区");
+				if (rel.startsWith("..") || rel === "") throw new Error("Path is outside the workspace");
 				const { staged, worktree } = await scmFileDiff(cwd, arg.path);
 				this.host.emit({
 					type: "scm_data", reqId, kind, ok: true,
@@ -347,7 +347,7 @@ export class FilesService {
 				this.host.emit({ type: "scm_data", reqId, kind, ok: true, text });
 				return;
 			}
-			throw new Error("无效的 scm 查询参数");
+			throw new Error("Invalid scm query");
 		} catch (err) {
 			if (isNotRepoError(err)) {
 				// Not a repo — a valid empty answer so the panel shows its hint.
@@ -505,15 +505,15 @@ export class FilesService {
 		}
 	}
 
-	/** 实时监听不可用（网络盘/WSL/受限目录）：一次性告知用户已回落 10s 轮询，
-	 *  免得疑惑「面板为什么不实时」。每个工作区根只提示一次。 */
+	/** Live watching unavailable (network drive / WSL / restricted dir): tell the user once that we
+	 *  fell back to 10s polling, so they are not left wondering why the panel is not live. Once per workspace root. */
 	private noticeDegraded(root: string): void {
 		if (this.degradedNoticedFor === root) return;
 		this.degradedNoticedFor = root;
 		this.host.emit({
 			type: "notice",
 			level: "info",
-			text: "此目录不支持实时文件监听（网络盘/受限目录），文件面板已改为每 10 秒自动刷新。",
+			text: "This directory cannot be watched live (network/restricted). The file panel will refresh every 10 seconds.",
 		});
 	}
 
@@ -545,7 +545,7 @@ export class FilesService {
 				this.host.emit({
 					type: "notice",
 					level: "warning",
-					text: `路径超出工作区：${relPath}`,
+					text: `Path is outside the workspace: ${relPath}`,
 				});
 				return;
 			}
@@ -555,7 +555,7 @@ export class FilesService {
 				this.host.emit({
 					type: "notice",
 					level: "warning",
-					text: `不是文件：${relPath}`,
+					text: `Not a file: ${relPath}`,
 				});
 				return;
 			}
@@ -618,7 +618,7 @@ export class FilesService {
 			this.host.emit({
 				type: "notice",
 				level: "error",
-				text: `读取文件失败：${(err as Error).message}`,
+				text: `Failed to read file: ${(err as Error).message}`,
 			});
 		}
 	}
@@ -632,7 +632,7 @@ export class FilesService {
 				this.host.emit({
 					type: "notice",
 					level: "warning",
-					text: `路径超出工作区：${relPath}`,
+					text: `Path is outside the workspace: ${relPath}`,
 				});
 				return;
 			}
@@ -640,7 +640,7 @@ export class FilesService {
 				this.host.emit({
 					type: "notice",
 					level: "warning",
-					text: "文件内容过大，无法保存（上限 2MB）",
+					text: "File is too large to save (2MB limit)",
 				});
 				return;
 			}
@@ -649,7 +649,7 @@ export class FilesService {
 				this.host.emit({
 					type: "notice",
 					level: "warning",
-					text: `不是文件：${relPath}`,
+					text: `Not a file: ${relPath}`,
 				});
 				return;
 			}
@@ -657,7 +657,7 @@ export class FilesService {
 			this.host.emit({
 				type: "notice",
 				level: "info",
-				text: `已保存：${wp.rel}`,
+				text: `Saved: ${wp.rel}`,
 			});
 			// Re-read through the same path as the preview request so the client
 			// gets the canonical content, line count and file size after saving.
@@ -666,7 +666,7 @@ export class FilesService {
 			this.host.emit({
 				type: "notice",
 				level: "error",
-				text: `保存文件失败：${(err as Error).message}`,
+				text: `Failed to save file: ${(err as Error).message}`,
 			});
 		}
 	}

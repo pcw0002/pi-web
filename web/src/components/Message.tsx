@@ -27,7 +27,7 @@ import { useT, type Translate } from "../i18n";
 import { parseSkillBlock, type SkillBlock } from "../skill-block";
 import { isRasterImage, fileToProcessedImage } from "../image-paste";
 
-/** 编辑重问编辑器里直接拖入/粘贴文件的上限（与服务端 MAX_UPLOAD_BYTES 一致）。 */
+/** Cap on files dropped/pasted directly into the edit-and-re-ask composer (matches server MAX_UPLOAD_BYTES). */
 const MAX_EDIT_UPLOAD_BYTES = 20 * 1024 * 1024;
 
 // ---------------------------------------------------------------------------
@@ -131,7 +131,7 @@ interface MessageProps {
 	qnIndex?: number;
 	qnActive?: boolean;
 	onJump?: (messageId: string) => void;
-	/** 思考文本是否换行（设置面板开关；false = 不换行横向滚动）。 */
+	/** Whether thinking text wraps (settings-panel switch; false = no wrap, horizontal scroll). */
 	thinkingWrap?: boolean;
 }
 
@@ -692,7 +692,7 @@ function Block({
 	streaming: boolean;
 	isLast: boolean;
 	onKillBash?: () => void;
-	/** 思考文本是否换行（false = 不换行横向滚动）。 */
+	/** Whether thinking text wraps (false = no wrap, horizontal scroll). */
 	thinkingWrap?: boolean;
 }) {
 	const t = useT();

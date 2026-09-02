@@ -40,6 +40,7 @@ import { scheduleUploadCleanup } from "./uploads.js";
 import { ensureWindowsBash, windowsBashDir } from "./ensure-bash.js";
 import { listThemes, resolveThemeFile } from "./themes.js";
 import { PluginManager, resolvePluginClientFile } from "./plugins.js";
+import { createReviewAgentTools } from "./review/agent-tools.js";
 import { McpBridge } from "./mcp-bridge.js";
 import type { ClientMessage, ServerMessage } from "./protocol.js";
 
@@ -64,18 +65,19 @@ const ALLOW_ORIGINS = (process.env.PI_WEB_ALLOW_ORIGINS ?? "")
 	.split(",")
 	.map((s) => s.trim().toLowerCase())
 	.filter(Boolean);
-/** 可选共享口令（PI_WEB_TOKEN）：设置后所有 HTTP/WS 请求必须携带——
- *  Authorization: Bearer / X-PI-Token 头、?token= 查询参数或 pi_web_token cookie
- *  任一匹配即可；供 0.0.0.0 / 反代等暴露场景兜底，未设置则行为不变。 */
+/** Optional shared token (PI_WEB_TOKEN): when set, every HTTP/WS request must carry it —
+ *  Authorization: Bearer / X-PI-Token header, ?token= query param, or pi_web_token cookie
+ *  (any one match). Fallback auth for 0.0.0.0 / reverse-proxy exposure; unset = unchanged behavior. */
 const AUTH_TOKEN = process.env.PI_WEB_TOKEN?.trim() ?? "";
 // Root of the SDK default per-project session dirs — chat transcripts live in
 // <SESSION_DIR_ROOT>/--<cwd>--/, shared with the pi CLI/TUI (getAgentDir
 // honors PI_CODING_AGENT_DIR).
 const SESSION_DIR_ROOT = join(getAgentDir(), "sessions");
 
-// Windows 轻量 bash 兜底：把 <home>/.pi-web/bin 前置到 PATH（SDK 的 bash 工具经
-// findBashOnPath 会找到其中的 bash.exe），并在无 Git Bash 时后台下载 busybox-w32。
-// 终端面板的 shell 探测链也已包含该目录（见 terminals.ts resolveShell）。
+// Windows lightweight bash fallback: prepend <home>/.pi-web/bin to PATH (the SDK bash
+// tool finds bash.exe there via findBashOnPath) and, if Git Bash is missing, download
+// busybox-w32 in the background. The terminal panel's shell probe chain also includes
+// this directory (see terminals.ts resolveShell).
 if (process.platform === "win32") {
 	process.env.PATH = `${windowsBashDir()}${delimiter}${process.env.PATH ?? ""}`;
 	void ensureWindowsBash();
@@ -84,7 +86,7 @@ if (process.platform === "win32") {
 const app = express();
 app.use(express.json({ limit: "10mb" }));
 
-/** 从请求中提取候选 token：头 / 查询参数 / cookie（浏览器导航场景靠 cookie 续命）。 */
+/** Extract a candidate token from the request: header / query / cookie (browser navigations rely on the cookie). */
 function requestTokens(req: { headers: IncomingMessage["headers"]; url?: string }): string[] {
 	const out: string[] = [];
 	const auth = req.headers.authorization;
@@ -112,10 +114,10 @@ function tokenOk(req: Parameters<typeof requestTokens>[0]): boolean {
 }
 
 if (AUTH_TOKEN) {
-	// /api/health 保持开放：无敏感信息，容器/监控探针需要它
+	// /api/health stays open: no sensitive data; container / monitor probes need it
 	app.use((req, res, next) => {
 		if (req.path === "/api/health" || tokenOk(req)) {
-			// 浏览器经 ?token= 首次进入后下发 HttpOnly cookie，后续导航/资源请求免带参数
+			// After the browser first enters via ?token=, set an HttpOnly cookie so later navigations/resource requests need no param
 			if (!req.headers.cookie?.includes("pi_web_token=")) {
 				res.setHeader(
 					"Set-Cookie",
@@ -191,9 +193,7 @@ const here = dirname(fileURLToPath(import.meta.url)); // <pkg>/dist/server or <p
 // Resolve the package root robustly: dev runs from <repo>/server (tsx), prod
 // from <pkg>/dist/server — the ancestor that actually has package.json wins.
 function resolvePkgRoot(): string {
-	// PI_WEB_PKG_ROOT: Electron 桌面版打包后，server 子进程从 extraResources 目录
-	//（process.resourcesPath）加载 web/dist 和 themes。通过这个 env var 告诉
-	// server 去哪里找 pkgRoot，避免 resolvePkgRoot 的候选路径找不到 package.json。
+	// PI_WEB_PKG_ROOT: optional override when the process cwd is not the package root.
 	if (process.env.PI_WEB_PKG_ROOT) return process.env.PI_WEB_PKG_ROOT;
 	const candidates = [
 		resolve(here, ".."),
@@ -238,26 +238,27 @@ app.get("/themes/:id.css", (req, res) => {
 // (which may hold credentials) never leave the machine. Registered BEFORE the
 // SPA catch-all below.
 const PLUGINS_DIR = join(DATA_DIR, "plugins");
-// 插件 HTTP 路由挂载点：host.route("GET", "/inbox") 实际暴露为
-// /plugins-api/<id>/inbox。PI_WEB_TOKEN 鉴权（上方 app.use）自动覆盖；
-// 响应已在前面过了 express.json。注意不要在此 catch-all 里消费 body。
+// Plugin HTTP route mount: host.route("GET", "/inbox") is actually exposed as
+// /plugins-api/<id>/inbox. PI_WEB_TOKEN auth (the app.use above) covers these
+// automatically; the body has already been through express.json. Do not consume
+// the body in this catch-all.
 app.all(["/plugins-api/:id/*", "/plugins-api/:id"], (req, res) => {
 	const rest = String((req.params as unknown as Record<string, string | undefined>)[0] ?? "");
 	pluginMgr.handleHttp(String(req.params.id ?? ""), req.method, rest, req, res);
 });
 app.get("/plugins/:id/client/*", (req, res) => {
-	// express 4 的通配参数在运行时落在 params[0]，但类型声明里没有 —— 显式取
+	// Express 4 wildcard params land in params[0] at runtime but are missing from the types — take explicitly
 	const rest = String((req.params as unknown as Record<string, string | undefined>)[0] ?? "");
 	const abs = resolvePluginClientFile(PLUGINS_DIR, req.params.id, rest);
 	if (!abs) {
 		res.status(404).end("plugin not found");
 		return;
 	}
-	// .mjs 常不在老 mime 表里，手动定 Content-Type 保证 import() 可用
+	// .mjs is often missing from older mime tables; set Content-Type by hand so import() works
 	if (/\.(mjs|js)$/.test(abs)) {
 		res.setHeader("Content-Type", "text/javascript; charset=utf-8");
 	}
-	res.setHeader("Cache-Control", "no-cache"); // 开发期改文件即生效
+	res.setHeader("Cache-Control", "no-cache"); // file edits take effect immediately during development
 	res.sendFile(abs, (err) => {
 		if (err && !res.headersSent)
 			res.status((err as NodeJS.ErrnoException & { statusCode?: number }).statusCode === 404 ? 404 : 500).end("not found");
@@ -267,13 +268,14 @@ app.get("/plugins/:id/client/*", (req, res) => {
 const RESTART_CHILD_ENV = "PI_WEB_RESTART_CHILD";
 const webDist = join(pkgRoot, "web", "dist");
 if (existsSync(webDist)) {
-	// gzip/deflate 响应压缩：前端 bundle ~1MB，局域网/反代场景传输量降到 ~1/4；
-	// 对 API JSON 同样生效，WS 升级不受影响
+	// gzip/deflate response compression: the frontend bundle is ~1MB; on LAN / reverse-proxy
+	// transfer drops to ~1/4. Also applies to API JSON; WS upgrade is unaffected
 	app.use(compression());
 	app.use(
 		express.static(webDist, {
-			// Vite 产物文件名带内容 hash，可永久强缓存——业务发版后 hash 变化自然失效，
-			// index.html 由下方 catch-all 处理（sendFile 不走这里）
+			// Vite output filenames include a content hash, so they can be cached forever —
+			// a release changes the hash and naturally invalidates. index.html is handled by
+			// the catch-all below (sendFile does not go through here)
 			setHeaders(res, filePath) {
 				if (filePath.includes(`${sep}assets${sep}`)) {
 					res.setHeader("Cache-Control", "public, max-age=31536000, immutable");
@@ -287,7 +289,7 @@ if (existsSync(webDist)) {
 		// with an unhandled ENOENT stack trace.
 		res.sendFile(join(webDist, "index.html"), (err) => {
 			if (err && !res.headersSent) {
-				res.status(503).send("正在更新 pi-web-ui，请稍后刷新…");
+				res.status(503).send("Updating pi-web-ui, refresh in a moment…");
 			}
 		});
 	});
@@ -297,8 +299,8 @@ if (existsSync(webDist)) {
 	// without web/dist). Fail loudly with a repair hint instead of serving a
 	// UI-less 404 with no explanation.
 	console.error(
-		"✖ 更新后的安装不完整（缺少 web/dist/index.html）。\n" +
-			"  请手动执行 npm i -g pi-web-ui@latest 修复后重新启动。",
+		"✖ Install after update is incomplete (missing web/dist/index.html).\n" +
+			"  Run npm i -g pi-web-ui@latest and restart.",
 	);
 	process.exit(1);
 }
@@ -408,27 +410,32 @@ const service = new AgentService(
 // Optional UI plugins (<dataDir>/plugins/<id>/): scanned on every client
 // attach so freshly dropped plugins appear without a server restart.
 const pluginMgr = new PluginManager(DATA_DIR, CWD);
-// MCP 工具桥：读取 <dataDir>/mcp.json 启动外部 MCP 服务器（stdio），把它们的
-// 工具并入与插件工具相同的 customTools 管线；单服务器失败不炸进程。
+// MCP tool bridge: read <dataDir>/mcp.json, start external MCP servers (stdio),
+// and fold their tools into the same customTools pipeline as plugin tools.
+// A single server failure must not crash the process.
 const mcpBridge = new McpBridge(DATA_DIR, (...a) => console.log("[mcp]", ...a));
 void mcpBridge.load().then(() => {
 	if (mcpBridge.getTools().length) service.applyPluginAgentTools();
 });
-// 插件扩展点：SDK 工具执行事件（bash/读文件等 start+end）转发给已注册的插件。
+// Plugin extension point: forward SDK tool-execution events (bash/read-file start+end) to registered plugins.
 service.onToolEvent = (ev) => pluginMgr.emitToolEvent(ev);
-// 插件扩展点：插件注册的 AI 工具（registerAgentTool）+ MCP 桥工具 → 会话创建时
-// 带上 + 变化时动态注入/移除已有会话。
-service.pluginToolsProvider = () => [...pluginMgr.getAgentTools(), ...mcpBridge.getTools()];
+const reviewTools = createReviewAgentTools(
+	() => pluginMgr.getCwd(),
+	() => service.broadcastReviewStatus(),
+);
+// Built-in Local Review tools + plugin tools + MCP tools.
+service.pluginToolsProvider = () => [...reviewTools, ...pluginMgr.getAgentTools(), ...mcpBridge.getTools()];
 pluginMgr.onAgentToolsChanged = () => service.applyPluginAgentTools();
-// 插件扩展点：插件斜杠命令（registerCommand）→ 命令选择器目录 + prompt 拦截执行。
+// Plugin extension point: plugin slash commands (registerCommand) → picker catalog + prompt intercept.
 pluginMgr.onCommandsChanged = () => service.applyPluginCommandCatalog();
 service.pluginCommandsProvider = () => pluginMgr.listCommands();
-// 插件扩展点：插件常驻后台任务（registerBackgroundTask）→ 并入「后台任务」面板。
+// Plugin extension point: plugin resident background tasks (registerBackgroundTask) → fold into the background-tasks panel.
 pluginMgr.onBgTasksChanged = () => service.refreshBackgroundServers();
 service.pluginBgTasksProvider = () => pluginMgr.bgTasks();
 service.pluginStopBgTask = (taskId) => pluginMgr.stopPluginBgTask(taskId);
-// 插件宿主工作区实时跟随当前项目：任意客户端 set_cwd 成功后同步给
-// PluginManager，编辑器等工作区跟随型插件随即切根（详见 plugins.ts notifyCwd）。
+// Plugin-host workspace follows the current project live: after any client set_cwd
+// succeeds, sync it to PluginManager so workspace-following plugins (editor, etc.)
+// switch roots immediately (see plugins.ts notifyCwd).
 service.onClientCwdChanged = (cwd) => pluginMgr.notifyCwd(cwd);
 
 // ---------------------------------------------------------------------------
@@ -459,15 +466,17 @@ function scheduleQuit(): boolean {
 }
 service.onQuit = scheduleQuit;
 
-/** 背压相对倍数：socket 未发送积压超过「最近一份 snapshot 大小 × 此倍数」时丢弃
- *  （issue #11 及其评论区的自适应建议）。固定 1MB 阈值在长会话下单份 snapshot 可达
- *  ~10MB——连半份都没发完就丢，前端频繁跳帧；短会话又太迟钝。相对阈值语义稳定在
- *  「缓冲堆了约 N 份快照」，不随会话长短漂移。 */
+/** Backpressure relative multiplier: drop when unsent socket backlog exceeds
+ *  "size of the latest snapshot × this multiplier" (issue #11 and the adaptive
+ *  suggestion in its comments). A fixed 1MB threshold drops mid-frame on long
+ *  sessions (a single snapshot can be ~10MB) and is too sluggish on short ones.
+ *  A relative threshold stays at "about N snapshots queued" regardless of session length. */
 const SNAPSHOT_BACKPRESSURE_FACTOR = 3;
-/** 背压绝对下限：低于此积压永不丢快照（小会话的相对阈值只有几 KB，会被
- *  正常的消息突发误伤，见 send() 内注释）。 */
+/** Backpressure absolute floor: never drop a snapshot below this backlog (a small
+ *  session's relative threshold is only a few KB and would be tripped by a normal
+ *  message burst — see the comment inside send()). */
 const SNAPSHOT_BACKPRESSURE_MIN_BYTES = 262_144;
-/** 背压丢弃后的延迟重发间隔。 */
+/** Delay before re-sending a snapshot dropped by backpressure. */
 const SNAPSHOT_RETRY_MS = 250;
 
 /**
@@ -493,15 +502,16 @@ wss.on("connection", (ws) => {
 	service.noteSocketOpen();
 	let clientId: string | null = null;
 	let closed = false;
-	/** 最近一份全量 snapshot 的估算字节数（UTF-16 ×2），供背压相对阈值用（issue #11）。 */
+	/** Estimated byte size of the latest full snapshot (UTF-16 ×2), used for the relative backpressure threshold (issue #11). */
 	let lastSnapshotBytes = 0;
 	/** Commands received while the session is still being created — replayed after attach. */
 	let pending: ClientMessage[] = [];
-	/** 背压丢快照后的延迟重发定时器（去重：一次只排一个）。 */
+	/** Delayed re-send timer after a backpressure drop (deduped: only one queued at a time). */
 	let snapshotRetryTimer: ReturnType<typeof setTimeout> | null = null;
 
-	// 协议层错误（非法帧/未 masked 帧等）：不注册 handler 会作为 uncaught
-	// exception 打崩整个进程（issue #11 附带发现）。记日志并按坏连接关闭。
+	// Protocol-layer errors (illegal / unmasked frames, etc.): without a handler they
+	// become an uncaught exception and crash the process (found alongside issue #11).
+	// Log and close as a bad connection.
 	ws.on("error", (err) => {
 		console.error(`[ws] socket error${clientId ? ` (${clientId})` : ""}:`, err.message);
 		try {
@@ -513,25 +523,30 @@ wss.on("connection", (ws) => {
 
 	const send = (msg: ServerMessage): void => {
 		if (closed || ws.readyState !== WebSocket.OPEN) return;
-		// 发送背压（issue #11）：socket 消费不过来时（前端慢/网络差），堆里会堆积
-		// 每份可达 ~10MB 的全量 snapshot 字符串，低内存主机直接 OOM。snapshot 是全量
-		// 幂等的且稍后必有更新的一份，可以安全丢弃——在序列化之前丢，连
-		// stringify 的分配都省掉。ready/notice/error/tool_delta 等消息必须送达。
-		// 阈值相对化（评论区建议）：用「最近一份 snapshot 的字节数 × 倍数」做基准，
-		// 首份无基准不丢（首次必达）。wire.length 是 UTF-16 字符数，×2 估算字节。
-		// 下限保护（小会话误伤修复）：小会话一份 snapshot 才 ~1KB，相对阈值只有几
-		// KB——前面一批 settings_state/slash_commands 的正常突发就能把 bufferedAmount
-		// 抬过阈值，把紧随其后的 snapshot_delta 静默丢掉；而丢弃后若无后续事件就
-		// 再也没有快照，客户端永远停在旧状态（前端靠 rev 缺口 get_state 自愈，
-		// 协议测试则直接卡死）。绝对下限保证小会话永不触发背压。
+		// Send backpressure (issue #11): when the socket cannot keep up (slow frontend /
+		// poor network), the heap piles up full snapshot strings of up to ~10MB each and
+		// a low-memory host OOMs. A snapshot is fully idempotent and a newer one will
+		// always follow, so it is safe to drop — drop before serialize so we skip the
+		// stringify allocation too. ready / notice / error / tool_delta must be delivered.
+		// Relative threshold (from the issue comments): use "latest snapshot bytes ×
+		// multiplier" as the baseline; the first snapshot has no baseline so it is never
+		// dropped (first must arrive). wire.length is UTF-16 code units; ×2 estimates bytes.
+		// Floor (small-session false-drop fix): a small session's snapshot is ~1KB, so the
+		// relative threshold is only a few KB — a normal burst of settings_state /
+		// slash_commands can push bufferedAmount over it and silently drop the following
+		// snapshot_delta; if no later event arrives, the client is stuck on the old state
+		// forever (the frontend self-heals via a rev gap + get_state; protocol tests just
+		// hang). The absolute floor guarantees small sessions never trip backpressure.
 		if (
 			(msg.type === "snapshot" || msg.type === "snapshot_delta") &&
 			lastSnapshotBytes > 0 &&
 			ws.bufferedAmount > Math.max(SNAPSHOT_BACKPRESSURE_MIN_BYTES, SNAPSHOT_BACKPRESSURE_FACTOR * lastSnapshotBytes)
 		) {
-			// 真正的慢客户端：丢弃是安全的，但不能「丢完就没了」——安排一次延迟
-			// 重发，等缓冲排空后快照最终必达（否则若此后再无事件，客户端将永久
-			// 停留在旧快照）。重发仍走 flushSnapshot：缓冲未排空则再次顺延。
+			// A genuinely slow client: dropping is safe, but we cannot "drop and it's gone"
+			// — schedule a delayed re-send so the snapshot eventually arrives after the
+			// buffer drains (otherwise, if no later event fires, the client stays on the
+			// old snapshot forever). Re-send still goes through flushSnapshot: if the
+			// buffer is still full it defers again.
 			if (!snapshotRetryTimer) {
 				snapshotRetryTimer = setTimeout(() => {
 					snapshotRetryTimer = null;
@@ -635,6 +650,32 @@ wss.on("connection", (ws) => {
 				break;
 			case "scm_commit":
 				void cs.scmQuery("commit", msg.reqId, { hash: msg.hash });
+				break;
+			case "review_diff":
+				void cs.reviewDiff(msg.reqId, msg.mode, msg.base);
+				break;
+			case "review_submit":
+				void cs.reviewSubmit(msg.reqId, msg.mode, msg.baseBranch, msg.comments);
+				break;
+			case "review_apply":
+				void cs.reviewApply();
+				break;
+			case "review_set_status":
+				void cs.reviewSetStatus(msg.status, msg.id);
+				break;
+			case "review_pending":
+				void cs.pushReviewStatus();
+				break;
+			case "review_nudge_ack":
+				break;
+			case "set_session_name":
+				cs.setSessionName(msg.name);
+				break;
+			case "session_tree":
+				cs.emitSessionTree();
+				break;
+			case "navigate_tree":
+				void cs.navigateTree(msg.entryId);
 				break;
 			case "read_file":
 				void cs.readFile(msg.path);
@@ -772,6 +813,7 @@ wss.on("connection", (ws) => {
 					visionBridgePrompt: msg.visionBridgePrompt,
 					reviewPrompt: msg.reviewPrompt,
 					reviewDisabledSkills: msg.reviewDisabledSkills,
+					additionalSkillPaths: msg.additionalSkillPaths,
 				});
 				break;
 			case "extensions_reload":
@@ -783,9 +825,9 @@ wss.on("connection", (ws) => {
 			case "plugin_settings": {
 				const r = pluginMgr.savePluginSettings(msg.pluginId, msg.values ?? {});
 				if (r.error) {
-					cs?.emitNotice("error", `插件设置保存失败：${r.error}`);
+					cs?.emitNotice("error", `Failed to save plugin settings: ${r.error}`);
 				} else {
-					cs?.emitNotice("info", "插件设置已保存");
+					cs?.emitNotice("info", "Plugin settings saved");
 				}
 				break;
 			}
@@ -834,11 +876,12 @@ wss.on("connection", (ws) => {
 						.ensureLoaded()
 						.then((plugins) => {
 							send({ type: "plugins", plugins, epoch: pluginMgr.epoch });
-							// 让各插件向新接入的客户端推送自身初始状态（onAttach 钩子）——
-							// 插件不要依赖客户端挂载后自己拉（见 plugins.ts onAttach 注释）。
+							// Let each plugin push its own initial state to the newly attached client
+							// (onAttach hook) — plugins must not rely on the client pulling after mount
+							// (see the onAttach comment in plugins.ts).
 							pluginMgr.notifyAttach(cid);
-							// 插件命令可能在本客户端 attach 过程中才注册（首载竞态）——
-							// 重推一次目录，保证选择器完整。
+							// Plugin commands may only register during this client's attach (first-load race) —
+							// push the catalog once more so the picker is complete.
 							service.applyPluginCommandCatalog();
 						})
 						.catch(() => {});
@@ -864,7 +907,7 @@ wss.on("connection", (ws) => {
 					send({
 						type: "notice",
 						level: "error",
-						text: `会话初始化失败：${(err as Error).message}`,
+						text: `Session init failed: ${(err as Error).message}`,
 					});
 				});
 			return;
@@ -921,7 +964,7 @@ httpServer.listen(PORT, HOST, () => {
 	console.log("");
 });
 
-// 上传文件保留期清理：启动扫一次 + 每 6 小时一次（best-effort，见 uploads.ts）
+// Upload retention cleanup: scan once at startup + every 6 hours (best-effort; see uploads.ts)
 scheduleUploadCleanup();
 
 // Local control socket (status / quiesce / unquiesce) — same data dir the

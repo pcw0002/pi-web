@@ -1,9 +1,9 @@
 /**
  * Left-panel sections + per-project workspace switching (UI):
- *   fresh state shows only 历史对话 (no 运行的对话 — nothing has been
+ *   fresh state shows only History (no Running conversations — nothing has been
  *   displaced while streaming), new_chat keeps the running list empty by
  *   design, and switching workspace via the footer updates the file tree and
- *   fires the 已切换到工作目录 notice.
+ *   fires the switched-to-working-directory notice.
  */
 import { CHROME_PATH } from "./lib/chrome.mjs";
 import { portUp, freePort } from "./lib/port-utils.mjs";
@@ -14,7 +14,7 @@ import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
-// fileURLToPath: URL.pathname 在 Windows 下是 /E:/... 形式，直接当 cwd 会失败
+// fileURLToPath: URL.pathname on Windows is /E:/...; using it as cwd directly fails
 const REPO_ROOT = fileURLToPath(new globalThis.URL("../", import.meta.url));
 
 const HEADLESS = CHROME_PATH;
@@ -59,10 +59,10 @@ const page = await browser.newPage();
 await page.goto(URL);
 await page.waitForSelector(".panel-left .panel-sessions", { timeout: 15000 });
 
-// Wait for the Chinese locale UI (conn label or section titles).
+// Wait for the English UI (conn label or section titles).
 await sleep(800);
 
-// 1. Fresh state: only 历史对话 title; no 运行的对话 section, no divider
+// 1. Fresh state: only History title; no Running conversations section, no divider
 //    (a single fresh conversation is never listed — it never ran in the
 //    background).
 let titles = await page
@@ -70,12 +70,12 @@ let titles = await page
 	.allTextContents();
 check(
 	"history title present in fresh state",
-	titles.some((t) => t.includes("历史对话")),
+	titles.some((t) => t.includes("History")),
 	titles.join("|"),
 );
 check(
-	"no 运行的对话 section yet (nothing running in background)",
-	!titles.some((t) => t.includes("运行的对话")),
+	"no running-conversations section yet (nothing running in background)",
+	!titles.some((t) => t.includes("Running chats")),
 	titles.join("|"),
 );
 
@@ -83,7 +83,7 @@ check(
 //    listed either, so the running section stays hidden by design.
 await page.evaluate(() => {
 	const btn = [...document.querySelectorAll("button")].find(
-		(b) => b.textContent && b.textContent.includes("新对话"),
+		(b) => b.textContent && b.textContent.includes("New chat"),
 	);
 	btn?.click();
 });
@@ -93,7 +93,7 @@ titles = await page
 	.allTextContents();
 check(
 	"running list still empty after new_chat (by design)",
-	!titles.some((t) => t.includes("运行的对话")),
+	!titles.some((t) => t.includes("Running chats")),
 	titles.join("|"),
 );
 check(
@@ -120,7 +120,7 @@ const notices = await page
 	.catch(() => []);
 check(
 	"workspace-switch notice fired",
-	notices.some((n) => n.includes("已切换到工作目录") || n.includes(B)),
+	notices.some((n) => n.includes("Switched workspace to") || n.includes(B)),
 	notices.join(" | "),
 );
 

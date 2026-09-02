@@ -1,15 +1,15 @@
 /**
- * vscode-editor 服务端入口 —— 类 VSCode 编辑器插件的文件系统后端。
+ * vscode-editor server entry — filesystem backend for the VS Code-like editor plugin.
  *
- * 约定：ESM 默认导出 { activate(host) → deactivate? }。
- * 客户端上行 plugin_message：{ action, reqId, ... }，本插件用 host.sendTo
- * 定向回给发起请求的 socket（带 reqId 供并发匹配），不广播。
+ * Convention: ESM default export { activate(host) → deactivate? }.
+ * Client sends plugin_message: { action, reqId, ... }; this plugin uses host.sendTo
+ * to reply to the requesting socket (reqId matches concurrent calls); no broadcast.
  *
- * 安全：
- * - 所有路径必须是相对 host.cwd（服务启动工作区）的相对路径，
- *   resolve 后必须仍落在 root 内，越界直接拒绝；
- * - 目录遍历跳过 node_modules/.git 等噪音目录与符号链接（防循环）；
- * - 读有 2MB 上限；写走 tmp + rename 原子落盘。
+ * Safety:
+ * - All paths must be relative to host.cwd (the workspace at service start);
+ *   after resolve they must still fall inside root, otherwise reject;
+ * - Directory walks skip noise dirs like node_modules/.git and symlinks (loop guard);
+ * - Reads cap at 2MB; writes use tmp + rename for atomic persist.
  */
 
 import { promises as fs } from "node:fs";
@@ -18,20 +18,20 @@ import path from "node:path";
 import { spawn } from "node:child_process";
 import { createRequire } from "node:module";
 
-/** 列目录时跳过的噪音条目名 */
+/** noise names skipped when listing a directory */
 const IGNORED = new Set([
 	"node_modules", ".git", ".pi-web", ".next", ".nuxt",
 	"dist", "build", "out", "venv", ".venv", "__pycache__",
 	"coverage", ".cache", ".DS_Store", "Thumbs.db",
 ]);
 
-const MAX_LIST_ENTRIES = 8000; // flatlist 总条目上限
-const MAX_DEPTH = 12; // flatlist 最大深度
-const MAX_READ_BYTES = 2 * 1024 * 1024; // 单文件读取上限（本地与远程 SFTP 共用）
+const MAX_LIST_ENTRIES = 8000; // flatlist entry cap
+const MAX_DEPTH = 12; // flatlist max depth
+const MAX_READ_BYTES = 2 * 1024 * 1024; // per-file read cap (shared by local and remote SFTP)
 const MAX_SSH_HOSTS = 32;
 const CONN_TIMEOUT_MS = 15000;
-const MAX_EXEC_OUTPUT = 256 * 1024; // 远程 exec 输出截断上限
-const MAX_DOWNLOAD_BYTES = 100 * 1024 * 1024; // 本地文件下载到电脑的大小上限（base64 经 WS）
+const MAX_EXEC_OUTPUT = 256 * 1024; // remote exec output truncation cap
+const MAX_DOWNLOAD_BYTES = 100 * 1024 * 1024; // size cap for downloading a local file to disk (base64 over WS)
 
 function toWire(p) {
 	return p.split(path.sep).join("/");
@@ -39,13 +39,13 @@ function toWire(p) {
 
 export default {
 	activate(host) {
-		// 可变：跟随主应用 set_cwd 实时切换（host.onCwdChange 回调，见 activate 尾部）
+		// mutable: follows host app set_cwd in real time (host.onCwdChange, see end of activate)
 		let root = path.resolve(host.cwd);
 
-		/** 相对路径 → 校验后的绝对路径；非法返回 null */
+		/** relative path → validated absolute path; null if illegal */
 		function safeResolve(rel) {
 			if (typeof rel !== "string") return null;
-			const abs = path.resolve(root, rel); // "" = 工作区根本身，合法
+			const abs = path.resolve(root, rel); // "" = workspace root itself, legal
 			if (abs !== root && !abs.startsWith(root + path.sep)) return null;
 			return abs;
 		}
@@ -54,15 +54,15 @@ export default {
 			return { res: true, reqId, ok: false, error };
 		}
 
-		/** 单层目录列表（tree 动作用，惰性展开） */
+		/** single-level directory list (for tree, lazy expand) */
 		async function listDir(relDir) {
 			const abs = safeResolve(relDir ?? "");
-			if (!abs) throw new Error("路径越界");
+			if (!abs) throw new Error("Path escapes workspace");
 			const dirents = await fs.readdir(abs === root ? root : abs, { withFileTypes: true });
 			const entries = [];
 			for (const d of dirents) {
 				if (IGNORED.has(d.name)) continue;
-				// 符号链接/junction 不跟随展开（防循环、防越界），只按名字显示类型
+				// do not follow symlinks/junctions (loop / escape guard); type from the name only
 				if (d.isSymbolicLink()) continue;
 				entries.push({
 					name: d.name,
@@ -75,7 +75,7 @@ export default {
 			return entries;
 		}
 
-		/** 全仓扁平文件列表（Ctrl+P 快速打开用），BFS 带深度/数量上限 */
+		/** workspace-flat file list (Ctrl+P); BFS with depth/count caps */
 		async function flatList() {
 			const files = [];
 			let truncated = false;
@@ -88,7 +88,7 @@ export default {
 				try {
 					dirents = await fs.readdir(dir, { withFileTypes: true });
 				} catch {
-					continue; // 权限等错误跳过该目录
+					continue; // skip the directory on permission errors etc.
 				}
 				for (const d of dirents) {
 					if (files.length >= MAX_LIST_ENTRIES) {
@@ -105,7 +105,7 @@ export default {
 			return { files, truncated };
 		}
 
-		/** 文件内容嗅探：无 NUL 且控制字符占比 <2% 视为文本 */
+		/** content sniff: no NUL and control chars <2% counts as text */
 		function looksLikeText(buf) {
 			const n = Math.min(buf.length, 8000);
 			let ctrl = 0;
@@ -117,7 +117,7 @@ export default {
 			return n === 0 || ctrl / n < 0.02;
 		}
 
-		/** 解码：严格 UTF-8 → GBK → latin1（与主应用 decodeText 同语义） */
+		/** decode: strict UTF-8 → GBK → latin1 (same as host decodeText) */
 		function decodeBuf(buf) {
 			try {
 				return new TextDecoder("utf-8", { fatal: true }).decode(buf);
@@ -130,10 +130,10 @@ export default {
 
 		async function readFile(rel) {
 			const abs = safeResolve(rel);
-			if (!abs) throw new Error("路径越界");
+			if (!abs) throw new Error("Path escapes workspace");
 			const stat = await fs.stat(abs);
-			if (!stat.isFile()) throw new Error("不是普通文件");
-			if (stat.size > MAX_READ_BYTES) throw new Error(`文件超过 ${MAX_READ_BYTES / 1024 / 1024}MB 上限`);
+			if (!stat.isFile()) throw new Error("Not a regular file");
+			if (stat.size > MAX_READ_BYTES) throw new Error(`File exceeds ${MAX_READ_BYTES / 1024 / 1024}MB limit`);
 			const buf = await fs.readFile(abs);
 			if (!looksLikeText(buf)) return { binary: true, size: stat.size };
 			return { text: decodeBuf(buf), encoding: "utf-8", size: stat.size };
@@ -141,9 +141,9 @@ export default {
 
 		async function writeFile(rel, text) {
 			const abs = safeResolve(rel);
-			if (!abs || abs === root) throw new Error("非法路径");
+			if (!abs || abs === root) throw new Error("Invalid path");
 			await fs.mkdir(path.dirname(abs), { recursive: true });
-			// 原子写：tmp + rename，防半截内容
+			// atomic write: tmp + rename, no truncated files
 			const tmp = abs + ".vsc-tmp-" + process.pid;
 			await fs.writeFile(tmp, String(text ?? ""), "utf-8");
 			await fs.rename(tmp, abs);
@@ -151,15 +151,15 @@ export default {
 
 		async function createEntry(rel, kind) {
 			const abs = safeResolve(rel);
-			if (!abs || abs === root) throw new Error("非法路径");
+			if (!abs || abs === root) throw new Error("Invalid path");
 			try {
 				if (kind === "dir") await fs.mkdir(abs);
 				else {
 					await fs.mkdir(path.dirname(abs), { recursive: true });
-					await fs.writeFile(abs, "", { flag: "wx" }); // 已存在则报错
+					await fs.writeFile(abs, "", { flag: "wx" }); // error if it already exists
 				}
 			} catch (err) {
-				if (err.code === "EEXIST") throw new Error("已存在同名文件/文件夹");
+				if (err.code === "EEXIST") throw new Error("A file or folder with that name already exists");
 				throw err;
 			}
 		}
@@ -167,34 +167,34 @@ export default {
 		async function renameEntry(rel, newName) {
 			if (typeof newName !== "string" || !newName.trim()
 				|| newName.includes("/") || newName.includes("\\") || newName.includes("..")) {
-				throw new Error("非法新名称");
+				throw new Error("Invalid new name");
 			}
 			const abs = safeResolve(rel);
-			if (!abs || abs === root) throw new Error("非法路径");
-			await fs.access(abs); // 不存在直接抛
+			if (!abs || abs === root) throw new Error("Invalid path");
+			await fs.access(abs); // throw if missing
 			await fs.rename(abs, path.join(path.dirname(abs), newName));
 		}
 
 		async function deleteEntry(rel) {
 			const abs = safeResolve(rel);
-			if (!abs || abs === root) throw new Error("拒绝删除根目录");
+			if (!abs || abs === root) throw new Error("Refusing to delete the workspace root");
 			await fs.rm(abs, { recursive: true, force: false });
 		}
 
 		// ------------------------------------------------------------------
-		// SFTP 同步：把本地工作区与远端目录互传
+		// SFTP sync: transfer between local workspace and remote directory
 		//
-		// 配置存工作区 <root>/.vscode/sftp.json（vscode-sftp 兼容字段名，
-		// 可直接编辑该文件、Ctrl+S 保存即生效；首次使用从旧版插件目录的
-		// sync-configs.json 一次性迁移）。依赖 ssh2 不随包分发，首次使用自动
-		// npm 补装到插件目录。方向：up 本地→远端；down 远端→本地。范围：file
-		// 单文件 / tree 子树 / all 全仓。排除规则：vscode-sftp 风格 glob。
+		// config lives in the workspace <root>/.vscode/sftp.json（vscode-sftp compatible field names，
+		// Edit that file and Ctrl+S to apply. On first use, migrate from the old plugin directory's
+		// sync-configs.json (one-shot). ssh2 is not shipped; auto-install on first use
+		// npm install into the plugin directory。direction：up Local→remote；down remote→Local。scope：file
+		// single file / tree subtree / all whole repo。exclude rules：vscode-sftp style glob。
 		// ------------------------------------------------------------------
 		const sftpCfgDir = () => path.join(root, ".vscode");
-		const sftpCfgFile = () => path.join(sftpCfgDir(), "sftp.json"); // vscode-sftp 约定路径（随工作区切换）
-		const LEGACY_SYNC_STORE = path.join(host.dir, "sync-configs.json"); // 旧版存储（迁移源）
+		const sftpCfgFile = () => path.join(sftpCfgDir(), "sftp.json"); // vscode-sftp conventional path (follows workspace switches)
+		const LEGACY_SYNC_STORE = path.join(host.dir, "sync-configs.json"); // legacy store (migration source)
 		const syncConns = new Map(); // workspaceRoot → {client,sftp}
-		let syncConnFp = ""; // 当前连接对应的配置指纹（配置文件改动后自动重连）
+		let syncConnFp = ""; // fingerprint of the current connection (reconnect if the config file changes)
 		const syncDeps = { mod: null, ok: false, installing: false, waiters: [] };
 
 		function posixJoin(base, rel) {
@@ -202,9 +202,9 @@ export default {
 			return `${String(base).replace(/\/+$/, "")}/${String(rel).replace(/^\/+/g, "")}`;
 		}
 
-		/** 内部统一形状；兼容 vscode-sftp 字段名（name/host/remotePath/privateKeyPath/
-		 *  passphrase/ignore/agent 以及旧版 watcher.autoUpload）。vscode-sftp 的
-		 *  privateKeyPath 习惯写 ~/.ssh/id_rsa，故解析时做 ~ 展开（见 resolveKeyFile）。 */
+		/** Internal canonical shape; vscode-sftp field names (name/host/remotePath/privateKeyPath/
+		 *  passphrase/ignore/agent and the old watcher.autoUpload). vscode-sftp's
+		 *  privateKeyPath is often ~/.ssh/id_rsa, so resolve expands ~ (see resolveKeyFile). */
 		function normalizeCfg(c) {
 			c = c && typeof c === "object" ? c : {};
 			const watcher = c.watcher && typeof c.watcher === "object" ? c.watcher : {};
@@ -217,10 +217,10 @@ export default {
 				passphrase: String(c.passphrase ?? ""),
 				privateKey: String(c.privateKey ?? ""),
 				privateKeyPath: String(c.privateKeyPath ?? ""),
-				// vscode-sftp 同时支持顶层 uploadOnSave 与旧版 watcher.autoUpload，二者都认
+				// vscode-sftp also accepts top-level uploadOnSave and the old watcher.autoUpload，both are accepted
 				uploadOnSave: Boolean(c.uploadOnSave ?? watcher.autoUpload),
-				// ssh-agent socket（vscode-sftp 用 "$SSH_AUTH_SOCK"）；配置里保持原样，
-				// 连接时再展开环境变量（见 getSyncSftp）
+				// ssh-agent socket (vscode-sftp uses "$SSH_AUTH_SOCK"); keep as written in config,
+				// expand env vars at connect time (see getSyncSftp)
 				agent: String(c.agent ?? ""),
 				protocol: String(c.protocol ?? "sftp").toLowerCase(),
 				remoteRoot: String(c.remotePath ?? c.remoteRoot ?? "").trim() || "/",
@@ -230,8 +230,8 @@ export default {
 			};
 		}
 
-		/** 解析私钥路径：支持 ~ 展开（vscode-sftp 习惯 ~/.ssh/id_rsa），绝对路径原样使用，
-		 *  其余相对路径回退按工作区解析（兼容旧行为）。 */
+		/** Resolve the private-key path: ~ expansion (vscode-sftp ~/.ssh/id_rsa), absolute paths as-is,
+		 *  other relative paths fall back to workspace resolve（compatible with old behavior）。 */
 		function resolveKeyFile(p) {
 			if (!p) return p;
 			if (p === "~") return os.homedir();
@@ -240,8 +240,8 @@ export default {
 			return path.resolve(root, p);
 		}
 
-		/** 每次直读小文件——用户改完 .vscode/sftp.json 保存即生效，无需重载；
-		 *  不存在时尝试从旧版插件目录存储一次性迁移过来 */
+		/** always re-read the small file——after the user edits .vscode/sftp.json saving applies immediately，no reload needed；
+		 *  if missing, try a one-time migrate from the old plugin-dir store */
 		async function readSyncCfg() {
 			try {
 				return normalizeCfg(JSON.parse(await fs.readFile(sftpCfgFile(), "utf8")));
@@ -251,13 +251,13 @@ export default {
 				const old = normalizeCfg(legacy?.[root]);
 				if (old.host) {
 					await saveSyncCfg(old);
-					return old; // 迁移成功
+					return old; // migrate succeeded
 				}
 			} catch {}
 			return {};
 		}
 
-		/** 写 vscode-sftp 风格 JSON（原子写 tmp+rename），用户可直接打开编辑 */
+		/** Write vscode-sftp-style JSON (atomic tmp+rename); the user can open and edit it */
 		async function saveSyncCfg(cfg) {
 			await fs.mkdir(sftpCfgDir(), { recursive: true });
 			const file = {
@@ -274,14 +274,14 @@ export default {
 			if (cfg.name) file.name = cfg.name;
 			if (cfg.privateKeyPath) file.privateKeyPath = cfg.privateKeyPath;
 			if (cfg.privateKey) file.privateKey = cfg.privateKey;
-			// 保持原始写法（含 $SSH_AUTH_SOCK 占位符），便于跨环境复用
+			// Keep the original spelling (including $SSH_AUTH_SOCK placeholder) so it is reusable across environments
 			if (cfg.agent) file.agent = cfg.agent;
 			const tmp = `${sftpCfgFile()}.tmp-${process.pid}`;
 			await fs.writeFile(tmp, JSON.stringify(file, null, 4) + "\n", "utf8");
 			await fs.rename(tmp, sftpCfgFile());
 		}
 
-		/** 在远端执行命令并收集原始 stdout Buffer（供打包下载；与 sshExec 不同不经 UTF8 解码） */
+		/** Run a command remotely and collect raw stdout Buffer (for packed download; unlike sshExec, no UTF-8 decode) */
 		function sshExecBuffer(c, cmd) {
 			return new Promise((resolve, reject) => {
 				c.client.exec(cmd, (err, stream) => {
@@ -292,7 +292,7 @@ export default {
 						size += d.length;
 						if (size > MAX_DOWNLOAD_BYTES) {
 							try { stream.close(); } catch {}
-							return void reject(new Error(`压缩包超过 ${Math.round(MAX_DOWNLOAD_BYTES / 1024 / 1024)}MB 上限`));
+							return void reject(new Error(`Archive exceeds ${Math.round(MAX_DOWNLOAD_BYTES / 1024 / 1024)}MB limit`));
 						}
 						chunks.push(d);
 					});
@@ -302,13 +302,13 @@ export default {
 			});
 		}
 
-		/** POSIX shell 单引号转义 */
+		/** POSIX shell single-quote escape */
 		const shQuote = (s) => `'${String(s ?? "").replace(/'/g, "'\\''")}'`;
 
-		/** 远程路径校验：必须绝对路径且无 .. 段 */
+		/** Remote path validation: must be absolute with no .. segments */
 		function safeRemotePath(p) {
 			p = String(p ?? "");
-			if (!p.startsWith("/") || p.split("/").includes("..")) throw new Error("非法路径");
+			if (!p.startsWith("/") || p.split("/").includes("..")) throw new Error("Invalid path");
 			return p;
 		}
 
@@ -330,7 +330,7 @@ export default {
 			};
 		}
 
-		/** 惰性加载 ssh2；未安装时自动 npm 补装（同 ssh 插件模式）。 */
+		/** lazy-load ssh2; auto npm-install if missing (same pattern as the ssh plugin). */
 		function ensureSshMod() {
 			if (syncDeps.ok) return Promise.resolve(syncDeps.mod);
 			if (syncDeps.installing) return new Promise((res) => syncDeps.waiters.push(res));
@@ -341,7 +341,7 @@ export default {
 					syncDeps.mod = m.default ?? m;
 					syncDeps.ok = true;
 				} catch {
-					host.notify("info", "📝 编辑器同步：开始安装依赖（ssh2）…");
+					host.notify("info", "📝 Editor sync: installing dependency (ssh2)…");
 					let cli = null;
 					try { cli = createRequire(import.meta.url).resolve("npm/bin/npm-cli.js"); } catch {}
 					const args = ["--prefix", host.dir, "install", "ssh2@latest", "--no-audit", "--no-fund"];
@@ -361,10 +361,10 @@ export default {
 							} catch {}
 						}
 						host.notify(syncDeps.ok ? "success" : "error",
-							syncDeps.ok ? "📝 编辑器同步依赖安装完成"
-								: "📝 编辑器同步依赖安装失败——请在插件目录手动执行 npm install ssh2");
+							syncDeps.ok ? "📝 Editor sync dependency installed"
+								: "📝 Editor sync dependency install failed — in the plugin dir run npm install ssh2");
 						for (const w of syncDeps.waiters.splice(0)) w(syncDeps.ok ? syncDeps.mod : null);
-						broadcastSshState(); // 依赖状态变化 → 刷新前端主机栏的 ⚠ssh2 按钮（函数声明提升，安全）
+						broadcastSshState(); // dep status changed → refresh the ⚠ssh2 button (fn is hoisted, safe)
 						res(syncDeps.ok ? syncDeps.mod : null);
 					}
 				}
@@ -382,9 +382,9 @@ export default {
 
 		async function getSyncSftp(cfg) {
 			const mod = await ensureSshMod();
-			if (!mod?.Client) throw new Error("ssh2 依赖未就绪");
-			if (!cfg?.host) throw new Error("尚未配置同步——请先点 ☁ → 同步配置或编辑 .vscode/sftp.json");
-			// 配置指纹变化（用户改了 .vscode/sftp.json）→ 自动断开旧连接重连
+			if (!mod?.Client) throw new Error("ssh2 is not ready");
+			if (!cfg?.host) throw new Error("Sync is not configured — open ☁ → Sync config or edit .vscode/sftp.json");
+			// config fingerprint changed（the user changed .vscode/sftp.json）→ auto-disconnect the old connection and reconnect
 			const fp = JSON.stringify([cfg.host, cfg.port, cfg.username, cfg.password, cfg.passphrase, cfg.privateKey, cfg.privateKeyPath, cfg.agent]);
 			const entry = syncConns.get(root);
 			if (entry && syncConnFp === fp) return entry.sftp;
@@ -399,21 +399,21 @@ export default {
 				};
 			if (cfg.password) opts.password = cfg.password;
 			else if (cfg.agent) {
-				// ssh-agent socket（vscode-sftp 用 "$SSH_AUTH_SOCK" 占位符）
+				// ssh-agent socket (vscode-sftp uses "$SSH_AUTH_SOCK" placeholder)
 				opts.agent = cfg.agent.replace(/\$SSH_AUTH_SOCK\b/g, () => process.env.SSH_AUTH_SOCK || "");
 				connect();
 				return;
 			}
 			else {
-				// 私钥：privateKeyPath 优先于内联 PEM；路径支持 ~ 展开（vscode-sftp 习惯 ~/.ssh/id_rsa）
+				// private key：privateKeyPath takes priority over inline PEM；paths support ~ expand（vscode-sftp convention ~/.ssh/id_rsa）
 				const keyPath = cfg.privateKeyPath ? resolveKeyFile(cfg.privateKeyPath) : null;
 				Promise.resolve(keyPath ? fs.readFile(keyPath, "utf8") : cfg.privateKey)
 					.then((key) => {
-						if (!key) return reject(new Error("请填写密码、私钥或 agent（编辑 .vscode/sftp.json 或用 ☁ 同步配置）"));
+						if (!key) return reject(new Error("Provide a password, private key, or agent (edit .vscode/sftp.json or use ☁ Sync config)"));
 						opts.privateKey = key;
 						if (cfg.passphrase) opts.passphrase = cfg.passphrase;
 					})
-					.catch(() => reject(new Error(`私钥文件读取失败：${cfg.privateKeyPath}`)))
+					.catch(() => reject(new Error(`Failed to read private key file：${cfg.privateKeyPath}`)))
 					.then(connect);
 				return;
 			}
@@ -434,8 +434,8 @@ export default {
 			return opened.sftp;
 		}
 
-		/** glob → RegExp（支持 ** 与 * 与 ? 通配；vscode-sftp 风格）。
-		 *  例：规则「**＋斜杠＋*.map」同时匹配 a.map 与 a/b/c.map */
+		/** glob → RegExp (supports **, *, ?; vscode-sftp style).
+		 *  e.g. **/*.map matches both a.map and a/b/c.map */
 		function globToRegExp(pattern) {
 			let re = "";
 			for (let i = 0; i < pattern.length; i++) {
@@ -443,8 +443,8 @@ export default {
 				if (c === "*") {
 					if (pattern[i + 1] === "*") {
 						i++;
-						if (i >= pattern.length - 1) re += ".*"; // 尾部 **：跨层匹配剩余全部（a/** 匹配子文件）
-						else if (pattern[i + 1] === "/") { i++; re += "(?:[^/]*/)*"; } // "**/" 匹配零层或多层目录
+						if (i >= pattern.length - 1) re += ".*"; // trailing **：match the rest across remaining levels（a/** match nested files）
+						else if (pattern[i + 1] === "/") { i++; re += "(?:[^/]*/)*"; } // "**/" match zero or more directory levels
 						else re += ".*";
 					} else re += "[^/]*";
 				} else if (c === "?") re += "[^/]";
@@ -454,18 +454,18 @@ export default {
 			return new RegExp(`^${re}$`);
 		}
 
-		/** 编译 ignore 规则集：整路径匹配 + 无斜杠模式任意层级生效 + 目录规则覆盖其下所有内容 */
+		/** compile ignore rule set：whole-path match + slash-less patterns match at any depth + a directory rule covers everything under it */
 		function makeIgnoreMatcher(patterns) {
 			const rules = (patterns ?? []).map(String).filter(Boolean).map((raw) => {
 				const pat = raw.replace(/^\/+|\/+$/g, "");
-				if (pat === "**") return [/.*/]; // 全忽略
+				if (pat === "**") return [/.*/]; // ignore everything
 				const list = [globToRegExp(pat)];
 				if (!pat.includes("/")) {
-					list.push(globToRegExp(`**/${pat}`)); // "dist"、"*.log" 匹配任意层级的段
-					list.push(globToRegExp(`${pat}/**`)); // 目录名规则覆盖顶层其下所有内容
-					list.push(globToRegExp(`**/${pat}/**`)); // 任意层级下的同名目录内容
+					list.push(globToRegExp(`**/${pat}`)); // "dist"、"*.log" match a segment at any depth
+					list.push(globToRegExp(`${pat}/**`)); // a directory-name rule covers everything under that top-level name
+					list.push(globToRegExp(`**/${pat}/**`)); // same-named directory contents at any depth
 				}
-				if (pat.endsWith("/**")) list.push(globToRegExp(pat.slice(0, -3))); // a/** 也忽略 a 本身
+				if (pat.endsWith("/**")) list.push(globToRegExp(pat.slice(0, -3))); // a/** also ignores a itself
 				return list;
 			});
 			return (rel) => rules.some((list) => list.some((re) => re.test(rel)));
@@ -475,7 +475,7 @@ export default {
 			return makeIgnoreMatcher(cfg.exclude)(rel);
 		}
 
-		/** 收集要传输的相对文件列表（双方通用：只产出 rel 路径数组） */
+		/** collect the relative file list to transfer（shared by both sides：only produce rel path array） */
 		async function collectLocal(relBase, cfg) {
 			const out = [];
 			async function walk(absDir, relDir) {
@@ -501,7 +501,7 @@ export default {
 			async function walk(rdir, relDir) {
 				let list;
 				try { list = await sftpCall(sftp, "readdir", rdir); }
-				catch { return; } // 目录不存在视为空
+				catch { return; } // missing directory is treated as empty
 				for (const f of list) {
 					const rel = relDir ? `${relDir}/${f.filename}` : f.filename;
 					if (isSyncExcluded(rel, cfg)) continue;
@@ -518,17 +518,17 @@ export default {
 			let cur = rpath.startsWith("/") ? "" : ".";
 			for (const s of segs) {
 				cur = cur === "." ? s : `${cur}/${s}`;
-				await sftpCall(sftp, "mkdir", cur).catch(() => {}); // 已存在会报错，忽略
+				await sftpCall(sftp, "mkdir", cur).catch(() => {}); // already-exists errors，ignore
 			}
 		}
 
-		/** 执行一次同步任务；返回摘要。progress(onDone, name) 上报进度。 */
+		/** run one sync job；return a summary。progress(onDone, name) report progress。 */
 		async function runSyncTransfer(cfg, direction, scope, targetRel, onProgress) {
 			const sftp = await getSyncSftp(cfg);
 			let rels;
 			if (scope === "file") {
 				rels = [targetRel];
-				if (isSyncExcluded(targetRel, cfg)) throw new Error(`「${targetRel}」在排除规则内`);
+				if (isSyncExcluded(targetRel, cfg)) throw new Error(`「${targetRel}」is in the exclude list`);
 			} else {
 				const baseRel = scope === "tree" ? String(targetRel || "") : "";
 				rels = direction === "up"
@@ -558,21 +558,21 @@ export default {
 		}
 
 		// ------------------------------------------------------------------
-		// SSH 远程主机（Remote-SSH 模式）
+		// SSH remote hosts (Remote-SSH mode)
 		//
-		// 主机 CRUD（<pluginDir>/ssh-hosts.json，明文本机、回显脱敏；首次运行
-		// 自动从旧版独立 ssh 插件的同名配置迁移）+ 连接池（keepalive 保活）+
-		// PTY shell（base64 流式转发）+ exec。
-		// 远程文件操作不设独立 action——客户端在 list/read/write/create/rename/
-		// delete 上带 connId 即路由到该连接的 SFTP，与本地文件共用一套前端路径。
-		// ssh2 依赖复用上方 ensureSshMod（未安装自动补装）。
-		// 事件：shell_data / shell_exit / conn_closed 定向推送创建者 socket；
-		// kind:"state" 广播主机/连接列表变化（凭据脱敏）。
+		// host CRUD（<pluginDir>/ssh-hosts.json，plaintext on this machine、redacted echo；first run
+		// auto from the old standalone ssh same-named config migrate from the plugin）+ connection pool（keepalive keepalive）+
+		// PTY shell（base64 stream-forward）+ exec。
+		// Remote file ops have no separate action — the client sends list/read/write/create/rename/
+		// delete with connId to route to that connection's SFTP; same frontend path model as local files.
+		// ssh2 deps reuse the helper above ensureSshMod（auto-install if missing）。
+		// Events: shell_data / shell_exit / conn_closed are pushed only to the creator socket;
+		// kind:"state" broadcast hosts/connection-list changes（credentials redacted）。
 		// ------------------------------------------------------------------
 		const SSH_STORE = path.join(host.dir, "ssh-hosts.json");
 		const LEGACY_SSH_STORE = path.join(host.dir, "..", "ssh", "ssh-hosts.json");
-		// 机密存储：主机密码/私钥/passphrase 按主机 id 走宿主 host.secrets
-		//（AES-256-GCM）；ssh-hosts.json 不再落明文凭据。旧版宿主无此设施时回退旧行为。
+		// secrets storage：host password/private key/passphrase per host id go through the host host.secrets
+		//（AES-256-GCM）；ssh-hosts.json no longer persist plaintext credentials。fall back to the old behavior when the host lacks this facility。
 		const sec = host.secrets;
 		const SECRET_FIELDS = [
 			["password", "pass"],
@@ -586,7 +586,7 @@ export default {
 		}
 
 		let sshCfgs = null;
-		const sshConns = new Map(); // connId → 连接记录
+		const sshConns = new Map(); // connId → connection record
 		let nextSshConn = 1;
 
 		async function ensureSshCfgs() {
@@ -597,14 +597,14 @@ export default {
 				sshCfgs = {};
 			}
 			if (!Array.isArray(sshCfgs.hosts)) {
-				try { // 迁移旧版独立 ssh 插件的主机列表（同格式直接搬）
+				try { // migrate the old standalone ssh the plugin's host list（same format, copy as-is）
 					const legacy = JSON.parse(await fs.readFile(LEGACY_SSH_STORE, "utf8"));
 					if (Array.isArray(legacy.hosts) && legacy.hosts.length) sshCfgs.hosts = legacy.hosts;
 				} catch {}
 			}
 			if (!Array.isArray(sshCfgs.hosts)) sshCfgs.hosts = [];
 			if (sec?.set) {
-				// 一次性迁移：历史明文凭据 → 加密机密 + 文件剥离
+				// one-shot migrate：historical plaintext credentials → encrypted secrets + strip from file
 				let migrated = false;
 				for (const h of sshCfgs.hosts) {
 					if (!h.id) continue;
@@ -617,10 +617,10 @@ export default {
 						}
 					}
 				}
-				if (migrated) { try { await saveSshCfgs(); } catch {} host.log("已将 SSH 主机凭据迁移到加密存储"); }
+				if (migrated) { try { await saveSshCfgs(); } catch {} host.log("Migrated SSH host credentials into encrypted storage"); }
 			}
 			if (sec?.get) {
-				// 回填内存副本（连接需要真实凭据；脱敏回显在 publicSshHost 层做）
+				// refill the in-memory copy（connecting needs real credentials；redacted echo is done in publicSshHost layer）
 				for (const h of sshCfgs.hosts) {
 					if (!h.id) continue;
 					for (const [field] of SECRET_FIELDS) {
@@ -639,14 +639,14 @@ export default {
 			const hosts = sec
 				? (sshCfgs?.hosts ?? []).map((h) => {
 					const clean = { ...h };
-					for (const [field] of SECRET_FIELDS) delete clean[field]; // 凭据只进机密库
+					for (const [field] of SECRET_FIELDS) delete clean[field]; // credentials go only into the secrets store
 					return clean;
 				})
 				: (sshCfgs?.hosts ?? []);
 			await fs.writeFile(SSH_STORE, JSON.stringify({ ...sshCfgs, hosts }, null, "\t"), "utf8");
 		}
 
-		/** 保存/清除某台主机的某个凭据字段（值真 → 写；显式 null → 删）。 */
+		/** Save/clear one host credential field (truthy → write; explicit null → delete). */
 		function storeHostSecret(hostId, field, value) {
 			const name = hostSecretName(hostId, field);
 			if (!sec || !name || !hostId) return;
@@ -656,7 +656,7 @@ export default {
 			} catch {}
 		}
 
-		/** 脱敏回显：密码/私钥不回传，只报是否存在 */
+		/** redacted echo：Password/private key is not echoed，only report whether it exists */
 		function publicSshHost(h) {
 			return {
 				id: h.id, name: h.name, host: h.host, port: h.port ?? 22,
@@ -682,7 +682,7 @@ export default {
 
 		function getSshConn(connId) {
 			const c = sshConns.get(connId);
-			if (!c) throw new Error("连接不存在或已断开");
+			if (!c) throw new Error("Connection does not exist or is closed");
 			return c;
 		}
 
@@ -699,7 +699,7 @@ export default {
 		async function connectSshHost(cfg, clientId, reqId) {
 			try {
 				const mod = await ensureSshMod();
-				if (!mod?.Client) throw new Error("ssh2 依赖未就绪，稍候再试");
+				if (!mod?.Client) throw new Error("ssh2 is not ready, try again shortly");
 				const connId = `c${nextSshConn++}`;
 				const c = {
 					connId, client: new mod.Client(), ownerId: clientId, hostId: cfg.id,
@@ -724,13 +724,13 @@ export default {
 					})
 					.on("error", (err) => {
 						const m = err?.level ? `[${err.level}] ${err.message}` : err?.message ?? String(err);
-						if (c.status === "connecting") { // 首连失败不留半连接
+						if (c.status === "connecting") { // failed first connect must not leave a half-open connection
 							sshConns.delete(connId);
 							broadcastSshState();
 							host.sendTo(clientId, { res: true, reqId, ok: false, action: "connect", error: m });
 						} else dropSshConn(c, m);
 					})
-					.on("close", () => dropSshConn(c, "连接已关闭"));
+					.on("close", () => dropSshConn(c, "Connection closed"));
 				c.client.connect(opts);
 			} catch (err) {
 				host.sendTo(clientId, { res: true, reqId, ok: false, action: "connect", error: err?.message ?? String(err) });
@@ -749,7 +749,7 @@ export default {
 			});
 		}
 
-		// ---- 远程文件操作（经连接的 SFTP；错误统一抛给路由 catch） -----------------
+		// ---- remote file operations（via the connection's SFTP；errors are thrown up to the router catch） -----------------
 		async function remoteList(c, dirPath) {
 			const list = await sftpCall(await getSftp(c), "readdir", dirPath || "/");
 			const entries = list.map((f) => ({
@@ -765,7 +765,7 @@ export default {
 		async function remoteRead(c, p) {
 			const sftp = await getSftp(c);
 			const stat = await sftpCall(sftp, "stat", p);
-			if (stat.size > MAX_READ_BYTES) throw new Error(`文件超过 ${MAX_READ_BYTES / 1024 / 1024}MB 上限`);
+			if (stat.size > MAX_READ_BYTES) throw new Error(`File exceeds ${MAX_READ_BYTES / 1024 / 1024}MB limit`);
 			const buf = await sftpCall(sftp, "readFile", p);
 			if (buf.includes(0)) return { binary: true, size: buf.length };
 			return { text: decodeBuf(buf), encoding: "utf-8", size: buf.length };
@@ -784,7 +784,7 @@ export default {
 		async function remoteRename(c, p, newName) {
 			if (typeof newName !== "string" || !newName.trim()
 				|| newName.includes("/") || newName.includes("\\") || newName.includes("..")) {
-				throw new Error("非法新名称");
+				throw new Error("Invalid new name");
 			}
 			const idx = p.lastIndexOf("/");
 			const parent = idx >= 0 ? p.slice(0, idx) : "";
@@ -797,9 +797,9 @@ export default {
 			else await sftpCall(sftp, "unlink", p);
 		}
 
-		// ---- PTY shell 与 exec ---------------------------------------------------
+		// ---- PTY shell and exec ---------------------------------------------------
 		function sshOpenShell(c, msg, reqId, clientId) {
-			c.ownerId = clientId; // 重连/多标签后：最新请求者接管该连接的终端输出流
+			c.ownerId = clientId; // reconnect/after extra tabs：the latest requester takes over this connection's terminal output stream
 			c.client.shell(
 				{ cols: msg.cols ?? 80, rows: msg.rows ?? 24, term: "xterm-256color" },
 				(err, stream) => {
@@ -828,7 +828,7 @@ export default {
 				stream.stderr.on("data", (d) => chunks.push(d.toString("utf8")));
 				stream.on("close", (code) => {
 					let out = chunks.join("");
-					if (out.length > MAX_EXEC_OUTPUT) out = out.slice(0, MAX_EXEC_OUTPUT) + "\n…[截断]";
+					if (out.length > MAX_EXEC_OUTPUT) out = out.slice(0, MAX_EXEC_OUTPUT) + "\n…[truncated]";
 					host.sendTo(clientId, { res: true, reqId, ok: true, action: "exec", exitCode: code ?? 0, output: out });
 				});
 			});
@@ -839,7 +839,7 @@ export default {
 			const { action, reqId } = msg;
 			try {
 				switch (action) {
-					case "list": // 单层目录（文件树惰性展开）；带 connId = 远程目录
+					case "list": // single-level directory (lazy tree); connId = remote directory
 						if (msg.connId) {
 							host.sendTo(clientId, { res: true, reqId, ok: true, action,
 								dir: String(msg.dir ?? "/"), entries: await remoteList(getSshConn(msg.connId), msg.dir) });
@@ -851,34 +851,34 @@ export default {
 					case "flatlist":
 						host.sendTo(clientId, { res: true, reqId, ok: true, action, ...(await flatList()) });
 						break;
-					case "download": { // 下载到用户电脑：本地直读；带 connId 走远端 SFTP，文件夹用 tar.gz 打包
+					case "download": { // download to the user's computer: local read; connId uses remote SFTP; folders pack as tar.gz
 						if (!msg.connId) {
 							const abs = safeResolve(String(msg.path ?? ""));
-							if (!abs || abs === root) throw new Error("非法路径");
+							if (!abs || abs === root) throw new Error("Invalid path");
 							const st = await fs.stat(abs);
-							if (!st.isFile()) throw new Error("不是普通文件");
-							if (st.size > MAX_DOWNLOAD_BYTES) throw new Error(`文件超过 ${Math.round(MAX_DOWNLOAD_BYTES / 1024 / 1024)}MB 上限`);
+							if (!st.isFile()) throw new Error("Not a regular file");
+							if (st.size > MAX_DOWNLOAD_BYTES) throw new Error(`File exceeds ${Math.round(MAX_DOWNLOAD_BYTES / 1024 / 1024)}MB limit`);
 							const buf = await fs.readFile(abs);
 							host.sendTo(clientId, { res: true, reqId, ok: true, action, b64: buf.toString("base64"), size: st.size });
 							break;
 						}
-						// 远端范围
+						// remote scope
 						const c = getSshConn(msg.connId);
 						const p = safeRemotePath(msg.path);
 						const sftp = await getSftp(c);
 						let st;
-						try { st = await sftpCall(sftp, "stat", p); } catch { throw new Error("路径不存在"); }
+						try { st = await sftpCall(sftp, "stat", p); } catch { throw new Error("Path not found"); }
 						if (st.isDirectory()) {
-							// 文件夹：在远端就地打包（tar.gz），避免逐文件传输
+							// Folder：pack in place on the remote（tar.gz），avoid transferring file-by-file
 							const clean = p.replace(/\/+$/, "");
 							const name = clean.split("/").pop();
 							const parent = clean.split("/").slice(0, -1).join("/") || "/";
 							const buf = await sshExecBuffer(c, `cd ${shQuote(parent)} && tar -czf - ${shQuote(name)}`);
-							if (!buf.length) throw new Error("打包失败（远端无 tar 或目录不可读）");
+							if (!buf.length) throw new Error("Pack failed (no tar on remote, or directory unreadable)");
 							host.sendTo(clientId, { res: true, reqId, ok: true, action,
 								b64: buf.toString("base64"), size: buf.length, name: `${name}.tar.gz` });
 						} else {
-							if (Number(st.size) > MAX_DOWNLOAD_BYTES) throw new Error(`文件超过 ${Math.round(MAX_DOWNLOAD_BYTES / 1024 / 1024)}MB 上限`);
+							if (Number(st.size) > MAX_DOWNLOAD_BYTES) throw new Error(`File exceeds ${Math.round(MAX_DOWNLOAD_BYTES / 1024 / 1024)}MB limit`);
 							const buf = await sftpCall(sftp, "readFile", p);
 							host.sendTo(clientId, { res: true, reqId, ok: true, action,
 								b64: buf.toString("base64"), size: buf.length, name: p.split("/").pop() });
@@ -912,24 +912,24 @@ export default {
 						else await deleteEntry(msg.path);
 						host.sendTo(clientId, { res: true, reqId, ok: true, action });
 						break;
-					case "sync_get": { // 注意：不要与远程 SFTP 操作混用（远程走 list/read + connId）
+					case "sync_get": { // Note：do not mix with remote SFTP operation mix（remote uses list/read + connId）
 						const cfg = await readSyncCfg();
 						return void host.sendTo(clientId, { res: true, reqId, ok: true, action,
 							config: publicSync(cfg),
-							configPath: ".vscode/sftp.json", // 前端「编辑配置文件」入口
+							configPath: ".vscode/sftp.json", // frontend "edit config file" entry
 						});
 					}
 					case "sync_save": {
 						const c = msg.config ?? {};
-						if (!c.host || !String(c.host).trim()) throw new Error("主机地址不能为空");
-						if (!String(c.remoteRoot ?? "").trim().startsWith("/")) throw new Error("远端根路径必须是绝对路径（以 / 开头）");
+						if (!c.host || !String(c.host).trim()) throw new Error("Host cannot be empty");
+						if (!String(c.remoteRoot ?? "").trim().startsWith("/")) throw new Error("Remote root must be an absolute path (start with /)");
 						const old = await readSyncCfg();
 					const next = normalizeCfg({
 						...old,
 						host: String(c.host).trim(), port: Number(c.port) || 22,
 						username: c.username ?? old.username ?? "root",
 						name: c.name !== undefined ? String(c.name || "") : (old.name ?? ""),
-						// 凭据留空 = 沿用旧值；显式 null = 清除
+						// leave credentials blank = keep the old value；explicit null = clear
 						password: c.password === null ? "" : (c.password || old.password),
 						passphrase: c.passphrase === null ? "" : (c.passphrase || old.passphrase),
 						privateKey: c.privateKey === null ? "" : (c.privateKey || old.privateKey),
@@ -940,12 +940,12 @@ export default {
 						uploadOnSave: Boolean(c.uploadOnSave),
 					});
 						await saveSyncCfg(next);
-						dropSyncConn(root); // 配置变了，旧连接作废
+						dropSyncConn(root); // config changed，drop the old connection
 						return void host.sendTo(clientId, { res: true, reqId, ok: true, action,
 							config: publicSync(next), configPath: ".vscode/sftp.json",
 						});
 					}
-					case "sync_ensure": { // 「编辑配置文件」：确保存在（必要时写模板/迁移），返回相对路径
+					case "sync_ensure": { // "edit config file": ensure it exists (template/migrate if needed), return relative path
 						let cfg = await readSyncCfg();
 						if (!cfg.host) {
 							cfg = normalizeCfg({ host: "", remoteRoot: "/", ignore: [".git", "node_modules"] });
@@ -955,46 +955,46 @@ export default {
 					}
 					case "sync_test": {
 						const cfg = await readSyncCfg();
-						if (!cfg?.host) throw new Error("尚未配置同步——请先点 ☁ → 同步配置或编辑 .vscode/sftp.json");
+						if (!cfg?.host) throw new Error("Sync is not configured — open ☁ → Sync config or edit .vscode/sftp.json");
 						const sftp = await getSyncSftp(cfg);
-						// 探测远端根目录可达
+						// probe that the remote root is reachable
 						await sftpCall(sftp, "readdir", cfg.remoteRoot || "/");
 						return void host.sendTo(clientId, { res: true, reqId, ok: true, action });
 					}
 					case "sync_run": {
 						const cfg = await readSyncCfg();
-						if (!cfg?.host) throw new Error("尚未配置同步——请先点 ☁ → 同步配置或编辑 .vscode/sftp.json");
+						if (!cfg?.host) throw new Error("Sync is not configured — open ☁ → Sync config or edit .vscode/sftp.json");
 						const direction = msg.dir === "down" ? "down" : "up";
 						const scope = ["file", "tree", "all"].includes(msg.scope) ? msg.scope : "file";
 						if (scope === "file") {
 							const abs = safeResolve(msg.path);
-							if (!abs || abs === root) throw new Error("非法路径");
+							if (!abs || abs === root) throw new Error("Invalid path");
 						}
 						const summary = await runSyncTransfer(cfg, direction, scope, msg.path ?? "",
 							(done, total, name) => host.sendTo(clientId, { event: "sync_progress", done, total, name }));
 						return void host.sendTo(clientId, { res: true, reqId, ok: true, action, ...summary, dir: direction, scope });
 					}
 					// ----------------------------------------------------------------
-					// SSH 远程主机管理
+					// SSH remote host management
 					// ----------------------------------------------------------------
-					case "state": // 插件状态：主机列表 / 连接列表 / ssh2 依赖状态（脱敏）
+					case "state": // plugin state: host list / connection list / ssh2 dep status (redacted)
 						await ensureSshCfgs();
 						host.sendTo(clientId, { res: true, reqId, ok: true, action, state: publicSshState() });
 						break;
 					case "deps_install":
-						ensureSshMod(); // 内部幂等，已在装则等待，装完广播 state
+						ensureSshMod(); // internally idempotent，if already installing, wait，broadcast after install state
 						host.sendTo(clientId, { res: true, reqId, ok: true, action });
 						break;
 					case "hosts_save": {
 						await ensureSshCfgs();
 						const h = msg.host ?? {};
-						if (!h.host || !String(h.host).trim()) throw new Error("主机地址不能为空");
+						if (!h.host || !String(h.host).trim()) throw new Error("Host cannot be empty");
 						if (h.id) {
 							const i = sshCfgs.hosts.findIndex((x) => x.id === h.id);
-							if (i < 0) throw new Error("主机不存在");
+							if (i < 0) throw new Error("Host not found");
 							const old = sshCfgs.hosts[i];
-							// 凭据进机密库：留空 = 沿用旧值；显式 null = 清除（同步删机密）；
-							// 内存对象仍保留真实凭据供连接使用，脱敏在 publicSshHost 层
+							// credentials go into the secrets store：leave blank = keep the old value；explicit null = clear（also delete the secret）；
+							// in-memory object still keeps real credentials; redaction is in publicSshHost
 							storeHostSecret(h.id, "password", h.password === null ? null : (h.password || undefined));
 							storeHostSecret(h.id, "privateKey", h.privateKey === null ? null : (h.privateKey || undefined));
 							sshCfgs.hosts[i] = {
@@ -1003,13 +1003,13 @@ export default {
 								host: String(h.host).trim() || old.host,
 								port: Number(h.port) || old.port,
 								username: h.username ?? old.username,
-								// 凭据留空 = 沿用旧值；显式 null = 清除
+								// leave credentials blank = keep the old value；explicit null = clear
 								password: h.password === null ? undefined : (h.password || old.password),
 								privateKey: h.privateKey === null ? undefined : (h.privateKey || old.privateKey),
 							};
 						} else {
-							if (!h.password && !h.privateKey) throw new Error("请填写密码或私钥（留空无法认证）");
-							if (sshCfgs.hosts.length >= MAX_SSH_HOSTS) throw new Error(`最多保存 ${MAX_SSH_HOSTS} 台主机`);
+							if (!h.password && !h.privateKey) throw new Error("Enter a password or private key (blank cannot authenticate)");
+							if (sshCfgs.hosts.length >= MAX_SSH_HOSTS) throw new Error(`At most ${MAX_SSH_HOSTS} hosts`);
 							const id = `h${Date.now().toString(36)}${Math.random().toString(36).slice(2, 5)}`;
 							storeHostSecret(id, "password", h.password || undefined);
 							storeHostSecret(id, "privateKey", h.privateKey || undefined);
@@ -1035,9 +1035,9 @@ export default {
 							if (x.id === msg.id) for (const [field] of SECRET_FIELDS) storeHostSecret(x.id, field, null);
 						}
 						sshCfgs.hosts = sshCfgs.hosts.filter((x) => x.id !== msg.id);
-						if (sshCfgs.hosts.length === before) throw new Error("主机不存在");
+						if (sshCfgs.hosts.length === before) throw new Error("Host not found");
 						await saveSshCfgs();
-						for (const c of [...sshConns.values()]) if (c.hostId === msg.id) dropSshConn(c, "主机已删除");
+						for (const c of [...sshConns.values()]) if (c.hostId === msg.id) dropSshConn(c, "Host deleted");
 						broadcastSshState();
 						host.sendTo(clientId, { res: true, reqId, ok: true, action });
 						break;
@@ -1045,12 +1045,12 @@ export default {
 					case "connect": {
 						await ensureSshCfgs();
 						const cfg = sshCfgs.hosts.find((x) => x.id === msg.id);
-						if (!cfg) throw new Error("主机不存在");
-						void connectSshHost(cfg, clientId, reqId); // ready/error 异步回复，内部已兑底报错
+						if (!cfg) throw new Error("Host not found");
+						void connectSshHost(cfg, clientId, reqId); // ready/error async reply，errors are already handled internally
 						return;
 					}
 					case "disconnect":
-						dropSshConn(getSshConn(msg.connId), "手动断开");
+						dropSshConn(getSshConn(msg.connId), "Disconnected by user");
 						host.sendTo(clientId, { res: true, reqId, ok: true, action });
 						break;
 					case "shell_open":
@@ -1062,7 +1062,7 @@ export default {
 						host.sendTo(clientId, { res: true, reqId, ok: true, action });
 						break;
 					}
-					case "shell_input": // 无 reqId 的流式通道：失败静默，不占响应协议
+					case "shell_input": // no-reqId streaming channel: fail silently, no response slot
 						try { getSshConn(msg.connId).streams.get(msg.shellId)?.write(Buffer.from(String(msg.b64 ?? ""), "base64")); } catch {}
 						return;
 					case "shell_resize":
@@ -1072,7 +1072,7 @@ export default {
 						return void sshExec(getSshConn(msg.connId), String(msg.cmd ?? ""), reqId, clientId);
 					default:
 						host.log("unknown action:", action);
-						host.sendTo(clientId, fail(reqId, `未知操作 ${action}`));
+						host.sendTo(clientId, fail(reqId, `Unknown action ${action}`));
 				}
 			} catch (err) {
 				host.sendTo(clientId, fail(reqId, err?.message ?? String(err)));
@@ -1080,16 +1080,16 @@ export default {
 		});
 
 		host.log(`activated; workspace root: ${toWire(root)}`);
-		// 新客户端接入时主动推送完整状态（服务端唯一事实源，对齐主应用快照架构）。
-		// host.onAttach 在旧版宿主（<0.35）上不存在——可选链兼容，客户端仍有
-		// 带 reqId 的拉取兑底。
+		// on new client attach, actively push the full state（server is the single source of truth，aligned with the host snapshot architecture）。
+		// host.onAttach on older hosts（<0.35）does not exist——optional-chaining compatible，the client still has
+		// reqId pull is still a fallback.
 		const offAttach = host.onAttach?.((clientId) => {
 			void ensureSshCfgs().then(() => {
 				host.sendTo(clientId, { kind: "state", state: publicSshState() });
 			});
 		});
-		// 工作区实时跟随主应用 set_cwd：根变了 → 旧项目的同步连接作废
-		//（.vscode/sftp.json 每项目独立）、广播通知前端清缓存重建树。
+		// workspace follows the host app live set_cwd：root changed → the previous project's sync connection is dropped
+		//（.vscode/sftp.json per-project）、broadcast so the frontend clears caches and rebuilds the tree。
 		const offCwd = host.onCwdChange?.((next) => {
 			root = path.resolve(next);
 			for (const [, c] of syncConns) {
@@ -1099,7 +1099,7 @@ export default {
 			host.broadcast({ kind: "workspace", root: toWire(root) });
 			host.log(`workspace root switched: ${toWire(root)}`);
 		});
-		void ensureSshCfgs().then(() => ensureSshMod()); // 预热：迁移旧 ssh 插件配置 + 预载/自动补装 ssh2（完成后广播 state）
+		void ensureSshCfgs().then(() => ensureSshMod()); // warmup：migrate old ssh plugin config + preload/auto-install ssh2（broadcast when done state）
 		return () => {
 			off();
 			try { offAttach?.(); } catch {}
@@ -1117,5 +1117,5 @@ export default {
 	},
 };
 
-// 说明：host.cwd 是活的（跟随主应用 set_cwd，旧版宿主仍是启动时快照），
-// 编辑器以它为工作区根 —— onCwdChange 触发时切根、作废旧同步连接并广播前端。
+// Note: host.cwd is live (follows host set_cwd; older hosts still snapshot cwd at startup).
+// Editoruse it as the workspace root —— onCwdChange on trigger, switch the root、drop the old sync connection and broadcast to the frontend。

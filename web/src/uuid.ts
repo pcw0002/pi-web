@@ -1,13 +1,15 @@
 /**
- * UUID 生成助手。
+ * UUID helper.
  *
- * 为什么不用 crypto.randomUUID()：
- *   它只在安全上下文（HTTPS 或 localhost）可用——通过普通 HTTP 局域网 IP /
- *   远程主机访问 pi-web-ui 时它是 undefined；Safari < 15.4 更是完全没有。
- *   之前 WebSocket onopen 里调用它抛异常，hello 发不出去，整个会话挂死。
+ * Why not crypto.randomUUID():
+ *   It is only available in a secure context (HTTPS or localhost) — undefined
+ *   when pi-web-ui is reached over plain HTTP via a LAN IP / remote host;
+ *   Safari < 15.4 lacks it entirely. Calling it in WebSocket onopen used to
+ *   throw, so hello never went out and the whole session hung.
  *
- * 兜底用 crypto.getRandomValues()（RFC 4122 v4）——它在非安全上下文和所有
- * 现代浏览器都可用；实在没有（极端环境）才退到 Math.random。
+ * Fallback is crypto.getRandomValues() (RFC 4122 v4) — available in insecure
+ * contexts and every modern browser; Math.random only as a last resort in
+ * extreme environments.
  */
 export function randomUuid(): string {
 	if (

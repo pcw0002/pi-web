@@ -14,7 +14,7 @@ function rect(id: string, top: number, bottom: number): WinRect {
 const VIEW = { top: 0, bottom: 1000 };
 
 describe("planWindow", () => {
-	it("视口内的可见项不产生任何变更", () => {
+	it("visible items in the viewport produce no changes", () => {
 		const plan = planWindow(
 			[rect("a", -50, 500), rect("b", 900, 1100)],
 			VIEW,
@@ -24,7 +24,7 @@ describe("planWindow", () => {
 		expect(plan).toEqual({ show: [], hide: [], shrinkAbove: 0 });
 	});
 
-	it("缓冲带外的项进入 hide；视口上方者计入 shrinkAbove", () => {
+	it("items outside the buffer band enter hide; those above the viewport count toward shrinkAbove", () => {
 		const plan = planWindow(
 			[rect("above", -2000, -300), rect("below", 2600, 3000)],
 			VIEW,
@@ -32,10 +32,10 @@ describe("planWindow", () => {
 			new Set(),
 		);
 		expect(plan.hide).toEqual(["above", "below"]);
-		expect(plan.shrinkAbove).toBe(1700); // 只有上方那一条
+		expect(plan.shrinkAbove).toBe(1700); // only the one above
 	});
 
-	it("跨视口边缘（部分可见）不算隐藏", () => {
+	it("straddling the viewport edge (partially visible) is not hidden", () => {
 		const plan = planWindow(
 			[rect("straddle-top", -10, 400), rect("straddle-bottom", 990, 1400)],
 			VIEW,
@@ -46,7 +46,7 @@ describe("planWindow", () => {
 		expect(plan.shrinkAbove).toBe(0);
 	});
 
-	it("已隐藏的不可见项不重复输出（防连帧重复累计 shrink）", () => {
+	it("already-hidden invisible items are not emitted again (prevents per-frame shrink accumulation)", () => {
 		const hidden = new Set(["above", "below"]);
 		const plan = planWindow(
 			[rect("above", -2000, -300), rect("below", 2600, 3000)],
@@ -58,7 +58,7 @@ describe("planWindow", () => {
 		expect(plan.shrinkAbove).toBe(0);
 	});
 
-	it("已隐藏但滚回视口的项进入 show", () => {
+	it("already-hidden items that scrolled back into view enter show", () => {
 		const plan = planWindow(
 			[rect("back", -200, 600)],
 			VIEW,
@@ -69,7 +69,7 @@ describe("planWindow", () => {
 		expect(plan.hide).toEqual([]);
 	});
 
-	it("always 集合永不隐藏、永不显示", () => {
+	it("the always set is never hidden and never shown", () => {
 		const always = new Set(["pin"]);
 		const plan = planWindow(
 			[rect("pin", -9999, -9000), rect("far", 5000, 5100)],
@@ -83,12 +83,12 @@ describe("planWindow", () => {
 });
 
 describe("applyPlan", () => {
-	it("空计划返回原引用（跳过重渲染）", () => {
+	it("empty plan returns the original reference (skip re-render)", () => {
 		const prev = new Set(["a"]);
 		expect(applyPlan(prev, { show: [], hide: [], shrinkAbove: 0 })).toBe(prev);
 	});
 
-	it("hide/show 正确增删且不改入参", () => {
+	it("hide/show add/remove correctly without mutating the input", () => {
 		const prev = new Set(["a", "b"]);
 		const next = applyPlan(prev, { show: ["a"], hide: ["c"], shrinkAbove: 0 });
 		expect(next).toEqual(new Set(["b", "c"]));
@@ -99,15 +99,15 @@ describe("applyPlan", () => {
 describe("pickAlways", () => {
 	const msgs = (ids: string[]) => ids.map((id) => ({ id, role: "user" }));
 
-	it("预算内从末尾往前尽量多收", () => {
+	it("packs as many from the end as the budget allows", () => {
 		const always = pickAlways(msgs(["a", "b", "c", "d"]), new Map(), 200);
 		expect(always.has("d")).toBe(true);
 		expect(always.has("c")).toBe(true);
-		expect(always.has("b")).toBe(true); // 加到 b 时累计 144 仍未超
-		expect(always.has("a")).toBe(false); // 加 a 前累计 216 已超预算
+		expect(always.has("b")).toBe(true); // adding b: cumulative 144 still under budget
+		expect(always.has("a")).toBe(false); // before adding a, cumulative 216 already over budget
 	});
 
-	it("单条巨型消息（实测高度超预算）只常驻它自己", () => {
+	it("a single giant message (measured height over budget) is the only pinned one", () => {
 		const heights = new Map([
 			["big", 8000],
 			["small1", 72],
@@ -123,22 +123,22 @@ describe("pickAlways", () => {
 			heights,
 			1600,
 		);
-		// big 实测 8000 → 累计已超预算，不再往前收；但 big 本身始终保留
+		// big measured 8000 → already over budget, stop packing further; but big itself is always kept
 		expect([...always]).toEqual(["big"]);
 	});
 
-	it("无实测高度时用估算值，至少保留最后一条", () => {
+	it("uses estimates when no measured height; always keeps at least the last message", () => {
 		const always = pickAlways(msgs(["x", "y"]), new Map(), 0);
 		expect([...always]).toEqual(["y"]);
 	});
 
-	it("空消息集返回空集合", () => {
+	it("empty message set returns an empty set", () => {
 		expect(pickAlways([], new Map(), 1600).size).toBe(0);
 	});
 });
 
 describe("estimateMessageHeight", () => {
-	it("按角色给出量级正确的估算", () => {
+	it("estimates are in the right ballpark by role", () => {
 		expect(estimateMessageHeight("user")).toBeLessThan(
 			estimateMessageHeight("assistant"),
 		);

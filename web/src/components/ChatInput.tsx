@@ -1,7 +1,7 @@
 import { memo, useEffect, useRef, useState } from "react";
 import { FiSend, FiSquare, FiPaperclip, FiArrowUp } from "react-icons/fi";
 import type { ClientMessage, ModelInfo, SlashCommandInfo, UiMessage, UiState } from "../types";
-import { useT, useI18n } from "../i18n";
+import { useT } from "../i18n";
 import { isRasterImage } from "../image-paste";
 
 import { ModelThinking } from "./ModelThinking";
@@ -72,11 +72,6 @@ export const ChatInput = memo(function ChatInput({
 	onManageModels,
 }: ChatInputProps) {
 	const t = useT();
-	const { locale } = useI18n();
-	const slashDesc = (c: SlashCommandInfo) =>
-		locale === "en" && c.descriptionEn ? c.descriptionEn : (c.description ?? "");
-	const slashHint = (c: SlashCommandInfo) =>
-		locale === "en" && c.argumentHintEn ? c.argumentHintEn : (c.argumentHint ?? "");
 	const [text, setText] = useState("");
 	const [dragOver, setDragOver] = useState(false);
 	/** Slash-command picker: non-null while open (filtered by the current input). */
@@ -263,9 +258,9 @@ export const ChatInput = memo(function ChatInput({
 		// steering message (delivered as soon as the current assistant turn
 		// settles, skipping remaining tool calls — the pi CLI Enter semantic)
 		// and the agent immediately responds to it — see AgentService.prompt()
-		// in agent-service.ts. The 补充 (supplement) button passes queue=true,
+		// in agent-service.ts. The supplement button passes queue=true,
 		// which the server delivers as followUp instead — the prompt is sent
-		// only after the WHOLE run finishes ("AI 生成结束才发送").
+		// only after the WHOLE run finishes.
 		if (
 			send({
 				type: "prompt",
@@ -477,9 +472,9 @@ export const ChatInput = memo(function ChatInput({
 								{SOURCE_LABEL[c.source]}
 							</span>
 							<span className="slash-desc">
-								{slashDesc(c)}
+								{c.description}
 								{c.argumentHint && (
-									<span className="slash-hint">{slashHint(c)}</span>
+									<span className="slash-hint">{c.argumentHint}</span>
 								)}
 							</span>
 						</button>
@@ -514,9 +509,9 @@ export const ChatInput = memo(function ChatInput({
 											{SOURCE_LABEL[c.source]}
 										</span>
 										<span className="slash-help-desc">
-											{slashDesc(c)}
+											{c.description}
 											{c.argumentHint && (
-												<span className="slash-hint">{slashHint(c)}</span>
+												<span className="slash-hint">{c.argumentHint}</span>
 											)}
 										</span>
 									</div>

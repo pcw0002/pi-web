@@ -13,7 +13,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
-// fileURLToPath: URL.pathname 在 Windows 下是 /E:/... 形式，直接当 cwd 会失败
+// fileURLToPath: URL.pathname on Windows is /E:/...; using it as cwd directly fails
 const REPO_ROOT = fileURLToPath(new globalThis.URL("../", import.meta.url));
 
 /* eslint-env node */
@@ -65,20 +65,20 @@ async function run() {
 	const hintVisible = await page.locator(".goalbar-hint").count();
 	check("goal bar renders (idle hint)", hintVisible > 0 || (await page.locator(".goalbar-input").count()) > 0);
 
-	// If collapsed, expand it; then type a goal and click 开始.
+	// If collapsed, expand it; then type a goal and click Set.
 	const input = page.locator(".goalbar-input");
 	if ((await input.count()) === 0) {
 		await page.locator(".goalbar-hint").click();
 		await page.waitForSelector(".goalbar-input");
 	}
-	await page.locator(".goalbar-input").fill("把页面标题改为 Goal UI 测试");
-	// 开始 (Set) button — not the AI-提炼 (wizard) button.
+	await page.locator(".goalbar-input").fill("Change the page title to Goal UI test");
+	// Set button — not the AI-refine (wizard) button.
 	await page.locator(".goalbar-btn:not(.wizard)").click();
 	// Active goal bar replaces the edit row.
 	await page.waitForSelector(".goalbar-active", { timeout: 8000 });
 	check("active goal bar shown after set", true);
 	const text = await page.locator(".goalbar-text").innerText().catch(() => "");
-	check("active goal shows the goal text", text.includes("Goal UI 测试"), text);
+	check("active goal shows the goal text", text.includes("Goal UI test"), text);
 
 	// Clear it.
 	await page.locator(".goalbar-x").click();

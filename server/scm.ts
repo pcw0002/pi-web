@@ -66,10 +66,10 @@ async function git(cwd: string, args: string[]): Promise<string> {
 		return stdout;
 	} catch (err) {
 		const e = err as { message?: string; stderr?: string; killed?: boolean; code?: string };
-		if (e.code === "ENOENT") throw new Error("未找到 git 命令——请确认已安装 Git 并在 PATH 中");
-		if (e.killed) throw new Error("git 命令超时");
+		if (e.code === "ENOENT") throw new Error("git not found — install Git and ensure it is on PATH");
+		if (e.killed) throw new Error("git timed out");
 		const detail = (e.stderr ?? e.message ?? "").trim().split("\n")[0];
-		throw new Error(detail || "git 命令失败");
+		throw new Error(detail || "git command failed");
 	}
 }
 

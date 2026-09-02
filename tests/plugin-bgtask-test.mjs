@@ -1,11 +1,11 @@
 /**
- * 插件后台任务协议测试（零 token、自包含）。
+ * Plugin background-task protocol test (zero token, self-contained).
  *
- * 覆盖：host.registerBackgroundTask 注册的任务并入 bg_servers（taskId/plugin/
- * status 字段）；kill_background_server { taskId } 触发 stop 回调并移出列表；
- * 未知 taskId 静默失败不崩。
+ * Covers: tasks registered via host.registerBackgroundTask join bg_servers (taskId/plugin/
+ * status fields); kill_background_server { taskId } fires the stop callback and removes from the list;
+ * unknown taskId fails silently without crashing.
  *
- * 运行：先 npm run build:server，再 node tests/plugin-bgtask-test.mjs
+ * Run: npm run build:server, then node tests/plugin-bgtask-test.mjs
  */
 import { spawn } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync, realpathSync } from "node:fs";
@@ -30,13 +30,13 @@ export default {
 	activate(host) {
 		const task = host.registerBackgroundTask({
 			id: "nightly",
-			label: "🌙 定时任务",
-			status: "每 1h",
+			label: "🌙 nightly",
+			status: "every 1h",
 			stop: () => { host.notify("info", "task-stopped"); },
 		});
 		host.registerCommand({
 			name: "bgtask-update",
-			run: () => { task.update({ status: "每 30m" }); return "updated"; },
+			run: () => { task.update({ status: "every 30m" }); return "updated"; },
 		});
 	},
 };`,
@@ -68,7 +68,7 @@ function connect(clientId) {
 function waitFor(sock, pred, label, timeoutMs = 10_000) {
 	return new Promise((resolve2, reject) => {
 		const timer = setTimeout(() => {
-			sock.off("message", onMsg); // 超时也要清监听器，防泄漏堆积
+			sock.off("message", onMsg); // clear the listener on timeout too, to avoid leak pile-up
 			reject(new Error(`timeout waiting for ${label}`));
 		}, timeoutMs);
 		const onMsg = (raw) => {
@@ -108,8 +108,8 @@ try {
 
 	const sock = await connect("bgtask-test");
 
-	// -- 1. 任务注册后并入 bg_servers（插件异步激活，轮询到出现为止）--------------------
-	// 常驻收集器：每次 bg_servers 都记录最新列表（避免 waitFor 反复挂监听）。
+	// -- 1. after register, task joins bg_servers (plugin activates async; poll until it appears)--------------------
+	// Standing collector: every bg_servers records the latest list (avoids waitFor re-hanging listeners).
 	let latestBg = [];
 	sock.on("message", (raw) => {
 		const m = JSON.parse(raw.toString());
@@ -120,41 +120,41 @@ try {
 		task = latestBg.find((s) => s.taskId === "nightly");
 		if (!task) { sock.send(JSON.stringify({ type: "list_bg_servers" })); await new Promise((r) => setTimeout(r, 250)); }
 	}
-	if (!task || task.plugin !== "worker" || task.status !== "每 1h" || task.name !== "🌙 定时任务") {
-		fail(`插件任务未出现在 bg_servers：${JSON.stringify(task)}`);
+	if (!task || task.plugin !== "worker" || task.status !== "every 1h" || task.name !== "🌙 nightly") {
+		fail(`plugin task did not appear in bg_servers: ${JSON.stringify(task)}`);
 	} else {
-		console.log(`✓ 插件任务并入后台面板：${JSON.stringify(task)}`);
+		console.log(`✓ plugin task joined the background panel: ${JSON.stringify(task)}`);
 	}
 
-	// -- 2. update 刷新状态 ------------------------------------------------------------
+	// -- 2. update refreshes status ------------------------------------------------------------
 	sock.send(JSON.stringify({ type: "prompt", text: "/bgtask-update" }));
 	await waitFor(sock, (m) => m.type === "notice" && m.text === "updated", "update notice");
-	// 命令返回的 notice 可能受会话就绪时序影响——直接等任务状态刷新的实际效果。
+	// The command's notice can race session-ready timing — wait for the actual status refresh instead.
 	sock.send(JSON.stringify({ type: "prompt", text: "/bgtask-update" }));
 	let status2 = null;
-	for (let i = 0; i < 40 && status2 !== "每 30m"; i++) {
+	for (let i = 0; i < 40 && status2 !== "every 30m"; i++) {
 		status2 = latestBg.find((s) => s.taskId === "nightly")?.status;
-		if (status2 !== "每 30m") await new Promise((r) => setTimeout(r, 250));
+		if (status2 !== "every 30m") await new Promise((r) => setTimeout(r, 250));
 	}
-	if (status2 !== "每 30m") fail("status 未刷新");
-	else console.log("✓ task.update 刷新状态生效");
+	if (status2 !== "every 30m") fail("status was not refreshed");
+	else console.log("✓ task.update status refresh took effect");
 
-	// -- 3. kill_background_server { taskId } → stop 回调 + 移出列表 ---------------------
+	// -- 3. kill_background_server { taskId } → stop callback + removed from list ---------------------
 	sock.send(JSON.stringify({ type: "kill_background_server", taskId: "nightly" }));
-	// ① stop 回调在服务端进程 → 以 notice 作跨进程信号；② 列表随之移除
+	// (1) stop callback is in the server process → notice as the cross-process signal; (2) list removes it
 	await waitFor(sock, (m) => m.type === "notice" && m.text === "task-stopped", "task-stopped notice");
 	let removed = false;
 	for (let i = 0; i < 40 && !removed; i++) {
 		removed = !latestBg.some((x) => x.taskId === "nightly");
 		if (!removed) await new Promise((r) => setTimeout(r, 250));
 	}
-	if (!removed) fail("任务未从列表移除");
-	else console.log("✓ kill taskId → stop 回调触发 + 移出列表");
+	if (!removed) fail("task was not removed from the list");
+	else console.log("✓ kill taskId → stop callback fired + removed from list");
 
-	// -- 4. 未知 taskId 不崩 -----------------------------------------------------------------
+	// -- 4. unknown taskId does not crash -----------------------------------------------------------------
 	sock.send(JSON.stringify({ type: "kill_background_server", taskId: "ghost" }));
 	await new Promise((r) => setTimeout(r, 300));
-	console.log("✓ 未知 taskId 静默处理（进程存活）");
+	console.log("✓ unknown taskId handled silently (process alive)");
 
 	sock.close();
 } catch (err) {

@@ -1,2 +1,7 @@
-# pi-web-ui Electron 桌面版构建产物
-release/
+node_modules/
+
+# Cursor project cache / personal IDE state. Shared agent skill lives in skills/.
+.cursor/
+
+# Review artifacts written into the workspace under review
+.local-review/

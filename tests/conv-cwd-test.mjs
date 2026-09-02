@@ -16,7 +16,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { randomUUID } from "node:crypto";
-// fileURLToPath: URL.pathname 在 Windows 下是 /E:/... 形式，直接当 cwd 会失败
+// fileURLToPath: URL.pathname on Windows is /E:/...; using it as cwd directly fails
 const REPO_ROOT = fileURLToPath(new globalThis.URL("../", import.meta.url));
 
 const PORT = 8898;
@@ -103,7 +103,7 @@ check("conv1 cwd = A", snapshot?.cwd === A, snapshot?.cwd);
 const conv1 = snapshot.conversationId;
 
 // --- new_chat: conv1 is BLANK → reused in place (ac5a4c8 semantics: the
-// active blank chat IS the new chat; clicking 新对话 must not pile up ids) ---
+// active blank chat IS the new chat; clicking New chat must not pile up ids) ---
 send({ type: "new_chat" });
 await sleep(600); // any snapshot/delta would have arrived by now
 const conv2 = snapshot.conversationId;
@@ -178,7 +178,7 @@ check(
 );
 check(
 	"workspace-switch notices fired",
-	notices.some((n) => n.includes("已切换到工作目录")),
+	notices.some((n) => n.includes("Switched workspace to")),
 	notices.join(" | "),
 );
 

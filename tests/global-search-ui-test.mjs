@@ -1,7 +1,7 @@
 /**
- * 全局搜索 UI 冒烟（真实 Chrome headless，零 token）：
- * 顶栏「搜索」按钮打开弹窗 → 输入关键词 → 文件分区出现命中；
- * Ctrl+K 可开关弹窗；模型下拉出现搜索框并可过滤。
+ * Global search UI smoke (real Chrome headless, zero token):
+ * top-bar Search button opens the modal → type a keyword → file section shows hits;
+ * Ctrl+K toggles the modal; model dropdown shows a search box and can filter.
  */
 import { chromium } from "playwright-core";
 import { CHROME_PATH } from "./lib/chrome.mjs";
@@ -53,41 +53,41 @@ async function run() {
 	await page.goto(BASE);
 	await page.waitForSelector(".topbar", { timeout: 15000 });
 
-	// 1) 顶栏搜索按钮存在且点击打开弹窗
-	const searchBtn = page.locator(".topbar .chip", { hasText: "搜索" }).first();
-	check("顶栏有搜索按钮", (await searchBtn.count()) > 0);
+	// 1) top-bar search button exists and click opens the modal
+	const searchBtn = page.locator(".topbar .chip", { hasText: "Search" }).first();
+	check("top bar has a search button", (await searchBtn.count()) > 0);
 	await searchBtn.click();
 	await page.waitForSelector(".gs-modal", { timeout: 5000 });
-	check("点击按钮打开全局搜索弹窗", true);
+	check("clicking the button opens the global search modal", true);
 
-	// 2) 输入关键词 → 文件分区命中
+	// 2) type a keyword → file section hits
 	await page.fill(".gs-input-row input", "util");
 	await page.waitForSelector(".gs-item", { timeout: 8000 });
 	const fileHit = await page
 		.locator(".gs-item-title", { hasText: "alpha-util.ts" })
 		.count();
-	check("文件命中显示 alpha-util.ts", fileHit > 0);
+	check("file hits include alpha-util.ts", fileHit > 0);
 
-	// 3) 点击文件 → 打开文件预览
+	// 3) click a file → open file preview
 	await page.locator(".gs-item", { hasText: "alpha-util.ts" }).first().click();
 	await page.waitForSelector(".fp-modal, .file-preview, [class*=fp-]", { timeout: 5000 }).catch(() => {});
 	const previewVisible = await page.locator("text=alpha-util.ts").count();
-	check("点击后打开文件预览", previewVisible > 0);
+	check("click opens file preview", previewVisible > 0);
 	await page.keyboard.press("Escape");
 	await sleep(300);
 
-	// 4) Ctrl+K 开关
+	// 4) Ctrl+K toggle
 	await page.keyboard.press("Control+k");
 	await page.waitForSelector(".gs-modal", { timeout: 3000 }).catch(() => {});
-	check("Ctrl+K 打开弹窗", (await page.locator(".gs-modal").count()) > 0);
+	check("Ctrl+K opens the modal", (await page.locator(".gs-modal").count()) > 0);
 	await page.keyboard.press("Control+k");
 	await sleep(300);
-	check("再次 Ctrl+K 关闭弹窗", (await page.locator(".gs-modal").count()) === 0);
+	check("Ctrl+K again closes the modal", (await page.locator(".gs-modal").count()) === 0);
 
-	// 5) 模型下拉搜索框
+	// 5) model dropdown search box
 	await page.locator(".topbar .dropdown .chip").first().click();
 	await page.waitForSelector(".dd-search", { timeout: 3000 }).catch(() => {});
-	check("模型下拉出现搜索框", (await page.locator(".dd-search").count()) > 0);
+	check("model dropdown shows a search box", (await page.locator(".dd-search").count()) > 0);
 
 	await browser.close();
 }

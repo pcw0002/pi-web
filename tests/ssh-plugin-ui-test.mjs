@@ -1,14 +1,14 @@
 /**
- * 编辑器插件（vscode-editor，含 Remote-SSH）— 浏览器 UI 冒烟测试（零 token、自包含）。
+ * Editor plugin (vscode-editor, including Remote-SSH) — browser UI smoke (zero token, self-contained).
  *
- * 起隔离端口 server（临时 data-dir）+ 内嵌 mock SSH 远端，Chrome headless：
- * - 顶栏插件 tab → 编辑器视图挂载
- * - 侧栏「＋」新建主机弹层 → 主机出现在列表
- * - 点击主机连接 → 远端目录树展开；底部终端面板开 xterm
- * - 点击远端文件 → CodeMirror 加载内容；编辑 + Ctrl+S 保存回远端（磁盘核对）
- * - 关闭标签不弹确认框；断开后回到空视图
+ * Start an isolated-port server (temp data-dir) + in-process mock SSH remote, Chrome headless:
+ * - top-bar plugin tab → editor view mounts
+ * - sidebar "+" new-host dialog → host appears in the list
+ * - click host to connect → remote tree expands; bottom terminal panel opens xterm
+ * - click a remote file → CodeMirror loads content; edit + Ctrl+S saves back to remote (disk check)
+ * - close tab with no confirm dialog; disconnect returns to the empty view
  *
- * 运行：先 npm run build:server，再 node tests/ssh-plugin-ui-test.mjs
+ * Run: npm run build:server, then node tests/ssh-plugin-ui-test.mjs
  */
 import { CHROME_PATH } from "./lib/chrome.mjs";
 import { portUp } from "./lib/port-utils.mjs";
@@ -34,7 +34,7 @@ function check(name, ok, extra = "") {
 const dataDir = mkdtempSync(join(tmpdir(), "pi-web-ssh-ui-"));
 const plugDst = join(dataDir, "plugins", "vscode-editor");
 
-// 种插件 + 离线依赖
+// seed plugin + offline deps
 mkdirSync(plugDst, { recursive: true });
 cpSync(join(REPO, "dev/plugins/vscode-editor/manifest.json"), join(plugDst, "manifest.json"));
 cpSync(join(REPO, "dev/plugins/vscode-editor/index.mjs"), join(plugDst, "index.mjs"));
@@ -60,13 +60,13 @@ try {
 	page.on("pageerror", (e) => console.error("[pageerror]", e.message));
 	await page.goto(URL);
 
-	// -- 1. 插件 tab 出现并切换 -------------------------------------------------
+	// -- 1. plugin tab appears and we switch to it -------------------------------------------------
 	await page.waitForSelector("button.plugin-tab", { timeout: 20000 });
-	await page.locator("button.plugin-tab", { hasText: "编辑器" }).first().click();
+	await page.locator("button.plugin-tab", { hasText: "Editor" }).first().click();
 	await page.waitForSelector(".vsc", { timeout: 15000 });
-	check("插件视图挂载", true);
+	check("plugin view mounted", true);
 
-	// -- 2. SSH tab：新建主机弹层 ------------------------------------------------------
+	// -- 2. SSH tab: new-host dialog ------------------------------------------------------
 	await page.locator('.vsc-stabs .stab[data-pane="ssh"]').click();
 	await page.locator('.vsc-pane[data-pane="ssh"] button[data-act="add-host"]').click();
 	await page.waitForSelector(".vsc-host-bg:not(.vsc-hidden)", { timeout: 5000 });
@@ -79,62 +79,62 @@ try {
 	await form.locator(".save-host").click();
 	await page.waitForSelector(".vsc-hrow", { timeout: 8000 });
 	const nm = await page.locator(".vsc-hrow .nm").innerText();
-	check("主机保存后出现在列表", nm.includes("mock-host"), nm);
+	check("host appears in the list after save", nm.includes("mock-host"), nm);
 
-	// -- 3. 点击主机连接 → 远端目录树展开 --------------------------------------------
+	// -- 3. click host to connect → remote dir tree expands --------------------------------------------
 	await page.locator(".vsc-hrow").first().click();
 	await page.waitForSelector('.vsc-sshtree .vsc-row[data-scope^="c"]', { timeout: 25000 });
-	check("连接成功且远端目录树展开", true);
+	check("connected and remote dir tree expanded", true);
 	const names = await page.locator('.vsc-sshtree .vsc-row[data-scope^="c"] .nm').allInnerTexts();
-	check("远端目录列出 home 内容", names.some((n) => n.includes("a.txt")) && names.some((n) => n.includes("sub")), names.join(","));
+	check("remote dir lists home contents", names.some((n) => n.includes("a.txt")) && names.some((n) => n.includes("sub")), names.join(","));
 
-	// -- 4. 底部终端面板（SSH tab 的 🖥 入口） --------------------------------------------
+	// -- 4. bottom terminal panel (🖥 entry on the SSH tab) --------------------------------------------
 	await page.locator('.vsc-pane[data-pane="ssh"] .vsc-side-head button[data-act="new-term"]').click();
 	await page.waitForSelector(".vsc-termarea .xterm", { timeout: 15000 });
-	check("xterm 终端渲染", true);
+	check("xterm terminal rendered", true);
 	const tt = await page.locator(".vsc-ttab .tn").first().innerText();
-	check("终端标签显示主机名", tt.includes("mock-host"), tt);
+	check("terminal tab shows the host name", tt.includes("mock-host"), tt);
 
-	// 敲一条命令进终端（输出渲染在 canvas 里不直接断言文本，只确保面板无异常）
+	// type a command into the terminal (output is on a canvas so we don't assert text, just that the panel is healthy)
 	await page.locator(".vsc-termarea").click();
 	await page.keyboard.type("ui-smoke");
 	await page.keyboard.press("Enter");
 	await sleep(600);
-	check("终端输入无异常", true);
+	check("terminal input has no errors", true);
 
-	// -- 5. 打开远程文件编辑 ------------------------------------------------------------
+	// -- 5. open a remote file for edit ------------------------------------------------------------
 	await page.locator('.vsc-sshtree .vsc-row[data-scope^="c"]', { hasText: "a.txt" }).first().click();
 	await page.waitForSelector(".vsc-editor:not(.vsc-hidden) .cm-content", { timeout: 8000 });
 	const content = await page.locator(".vsc-editor .cm-content").innerText();
-	check("CodeMirror 加载远端文件内容", content.includes("hello ssh"), JSON.stringify(content.slice(0, 40)));
+	check("CodeMirror loaded remote file content", content.includes("hello ssh"), JSON.stringify(content.slice(0, 40)));
 	const scopeTxt = await page.locator(".vsc-status .vsc-scope").innerText();
-	check("状态栏标记远程范围", scopeTxt.includes("mock-host"), scopeTxt);
+	check("status bar marks the remote scope", scopeTxt.includes("mock-host"), scopeTxt);
 
-	// 修改 + Ctrl+S 保存 → 远端内存 FS 核对
+	// edit + Ctrl+S save → check the remote in-memory FS
 	await page.locator(".vsc-editor .cm-content").click();
 	await page.keyboard.press("Control+End");
 	await page.keyboard.type("\nui-edited-line");
 	await page.keyboard.press("Control+s");
 	await sleep(1000);
 	const st = await page.locator(".vsc-state").innerText();
-	check("保存后状态恢复干净", !st.includes("未保存"), st);
+	check("status is clean after save", !st.includes("Unsaved"), st);
 	const savedOnRemote = await import("./lib/mock-ssh.mjs").then((m) => m.files["/home/test/a.txt"]?.toString());
-	check("修改已写回 mock 远端", savedOnRemote?.includes("ui-edited-line"), JSON.stringify(savedOnRemote));
+	check("edits were written back to the mock remote", savedOnRemote?.includes("ui-edited-line"), JSON.stringify(savedOnRemote));
 
-	// 关闭标签（已保存，不应弹确认框）
+	// close the tab (already saved, must not show a confirm dialog)
 	let dialogFired = false;
 	page.on("dialog", (d) => { dialogFired = true; void d.dismiss(); });
 	await page.locator(".vsc-tab.active .x").click();
 	await sleep(300);
-	check("已保存关闭不弹确认框", !dialogFired);
+	check("closing a saved tab does not show a confirm dialog", !dialogFired);
 
-	// -- 6. 断开（SSH tab） ---------------------------------------------------------------
+	// -- 6. disconnect (SSH tab) ---------------------------------------------------------------
 	await page.locator('.vsc-stabs .stab[data-pane="ssh"]').click();
 	await page.locator(".vsc-hrow").first().hover();
 	await page.locator('.vsc-hrow button[data-hop="dis"]').click();
 	await page.waitForSelector(".vsc-empty:not(.vsc-hidden)", { timeout: 8000 }).catch(() => {});
 	const phVisible = await page.locator(".vsc-empty").isVisible().catch(() => false);
-	check("断开后回到空视图", phVisible);
+	check("after disconnect, back to the empty view", phVisible);
 
 	await browser.close();
 } catch (err) {

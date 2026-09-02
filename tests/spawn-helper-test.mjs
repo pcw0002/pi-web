@@ -3,7 +3,7 @@
  *
  * Break the +x bit on the local node-pty spawn-helper, start the server,
  * create a terminal over WS, and verify the file is repaired to 0755 and
- * the terminal actually outputs (no "启动终端失败").
+ * the terminal actually outputs (no "failed to start terminal").
  */
 import { portUp, freePort } from "./lib/port-utils.mjs";
 import { fileURLToPath } from "node:url";
@@ -13,7 +13,7 @@ import { chmodSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import { setTimeout as sleep } from "node:timers/promises";
-// fileURLToPath: URL.pathname 在 Windows 下是 /E:/... 形式，直接当 cwd 会失败
+// fileURLToPath: URL.pathname on Windows is /E:/...; using it as cwd directly fails
 const REPO_ROOT = fileURLToPath(new globalThis.URL("../", import.meta.url));
 
 const PORT = 8898;
@@ -62,7 +62,7 @@ ws.on("message", (d) => {
 		return;
 	}
 	if (m.type === "terminal_output") output += m.data;
-	else if (m.type === "notice" && m.text.includes("启动终端失败")) failed = true;
+	else if (m.type === "notice" && m.text.includes("Failed to start terminal")) failed = true;
 });
 ws.on("open", () => ws.send(JSON.stringify({ type: "hello", clientId })));
 

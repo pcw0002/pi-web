@@ -1,5 +1,5 @@
-// Model-config modal — "自动获取模型列表" (fetch model list) UI test.
-// Opens 模型管理 → 新增服务商, fills baseUrl/apiKey, clicks the fetch button
+// Model-config modal — "Fetch model list" UI test.
+// Opens Model management → Add provider, fills baseUrl/apiKey, clicks the fetch button
 // and verifies the model rows get auto-filled from the mock /models endpoint,
 // plus the inline success/error messages.
 // Usage: npm run build && node model-config-ui-test.mjs
@@ -117,17 +117,17 @@ async function run() {
 			timeout: 30000,
 		});
 
-		// Open the model dropdown (top-bar chip) → 管理模型.
+		// Open the model dropdown (top-bar chip) → Manage models.
 		const modelChip = page.locator(".chip-model").first();
 		await modelChip.click();
 		const manageBtn = page
-			.locator(".dd-refresh", { hasText: "管理模型" })
+			.locator(".dd-refresh", { hasText: "Manage models" })
 			.first();
 		await manageBtn.waitFor({ timeout: 8000 });
 		await manageBtn.click();
 		await page.waitForSelector(".model-modal", { timeout: 10000 });
 
-		// 新增服务商 → edit form.
+		// Add provider → edit form.
 		const addBtn = page.locator(".modal-actions .btn.primary").first();
 		await addBtn.click();
 		await page.waitForSelector(".provider-form", { timeout: 8000 });
@@ -139,16 +139,16 @@ async function run() {
 		await inputs.nth(2).fill(`http://127.0.0.1:${MOCK_PORT}`);
 		await inputs.nth(3).fill("sk-test");
 
-		// Click 自动获取模型列表 and wait for the rows + success message.
+		// Click Fetch model list and wait for the rows + success message.
 		await page
-			.locator(".model-section-actions button", { hasText: "自动获取模型列表" })
+			.locator(".model-section-actions button", { hasText: "Fetch model list" })
 			.click();
 		await page.waitForFunction(
 			() => {
 				const rows = [...document.querySelectorAll(".model-row")];
 				const ids = rows.map((r) => r.querySelector("input")?.value ?? "");
 				const okMsg = [...document.querySelectorAll(".fetch-msg.ok")].some(
-					(el) => el.textContent.includes("已获取"),
+					(el) => el.textContent.includes("Fetched"),
 				);
 				return (
 					ids.includes("mock-a") &&
@@ -200,11 +200,11 @@ async function run() {
 		// Error path: invalid baseUrl → inline error message.
 		await inputs.nth(2).fill("ht!tp://nope");
 		await page
-			.locator(".model-section-actions button", { hasText: "自动获取模型列表" })
+			.locator(".model-section-actions button", { hasText: "Fetch model list" })
 			.click();
 		await page.waitForSelector(".fetch-msg.err", { timeout: 10000 });
 		const errText = await page.locator(".fetch-msg.err").first().textContent();
-		check("invalid baseUrl shows error message", errText.includes("无效"), errText);
+		check("invalid baseUrl shows error message", errText.includes("Invalid"), errText);
 
 		console.log(
 			`\n${failures === 0 ? "ALL PASS" : failures + " FAILURES"}`,

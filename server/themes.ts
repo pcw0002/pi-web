@@ -20,7 +20,7 @@ export interface ThemeInfo {
 const ID_RE = /^[A-Za-z0-9_-]+$/;
 
 /** Display-name marker inside a theme css file (first lines):
- *  `/* theme-name: 中文名 *∕` — falls back to the file id when absent.
+ *  `/* theme-name: Display Name *∕` — falls back to the file id when absent.
  *  Lets built-in AND user themes carry a human-readable label while the
  *  filename stays ASCII (id must match ID_RE). */
 const THEME_NAME_RE = /\/\*\s*theme-name:\s*(.+?)\s*\*\//;

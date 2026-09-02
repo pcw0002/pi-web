@@ -16,7 +16,8 @@ declare global {
  *
  * Downloads go through fetch → blob instead of a plain anchor navigation:
  * Chrome's Safe Browsing blocks direct HTTP downloads of "no-reputation" file
- * types (.zip/.exe/…) with a confusing "无法下载/请重试或联系你的组织" error,
+ * types (.zip/.exe/…) with a confusing "Unable to download / please retry or
+ * contact your organization" error (Chrome Safe Browsing copy),
  * and a failed request gives no usable feedback.
  *
  * On Windows the blob-anchor path can still be silently blocked — Safe
@@ -94,7 +95,7 @@ export async function downloadFile(
 				ok: false,
 				cancelled: false,
 				error:
-					body || (res.status === 404 ? "文件不存在" : `HTTP ${res.status}`),
+					body || (res.status === 404 ? "File not found" : `HTTP ${res.status}`),
 			};
 		}
 		const len = Number(res.headers.get("content-length") ?? "0");

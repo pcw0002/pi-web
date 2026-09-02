@@ -79,14 +79,14 @@ async function readCommandsFile(
 	} catch (err) {
 		return {
 			commands: [],
-			warning: `读取命令文件失败：${(err as Error).message}`,
+			warning: `Failed to read commands file: ${(err as Error).message}`,
 		};
 	}
 	let parsed: unknown;
 	try {
 		parsed = JSON.parse(raw);
 	} catch {
-		return { commands: [], warning: `命令文件不是有效 JSON：${path}` };
+		return { commands: [], warning: `Commands file is not valid JSON: ${path}` };
 	}
 	if (Array.isArray(parsed)) {
 		// Tolerate a bare array: [{name, command, cwd}]
@@ -116,7 +116,7 @@ async function readCommandsFile(
 				.map((c) => ({ name: c.name, command: c.command, cwd: c.cwd })),
 		};
 	}
-	return { commands: [], warning: `命令文件格式不正确：${path}` };
+	return { commands: [], warning: `Commands file has the wrong shape: ${path}` };
 }
 
 /** Persist the command list, creating .pi/ if needed. */
@@ -131,7 +131,7 @@ export async function saveCommandsFile(
 		await writeFile(path, JSON.stringify(payload, null, 2) + "\n", "utf8");
 		return { path };
 	} catch (err) {
-		return { path, error: `保存命令文件失败：${(err as Error).message}` };
+		return { path, error: `Failed to save commands file: ${(err as Error).message}` };
 	}
 }
 
@@ -157,20 +157,23 @@ interface TermEntry {
 	pendingOut: string;
 	/** Timer for the coalescing window; null = nothing pending. */
 	flushTimer: ReturnType<typeof setTimeout> | null;
-	// ---- 终端活力检测（liveness watchdog，仅 agent 工具路径参与）----
-	/** true = 该终端被 agent 的 terminal_create/input/key 触碰过（用户手开的
-	 *  终端永远不参与静默提醒）。同时也是「当前纪元仍武装」的标志：看门狗
-	 *  触发一次后清零，下次 agent 触碰重新开始计时。 */
+	// ---- Terminal liveness (watchdog; only the agent-tool path participates) ----
+	/** true = this terminal has been touched by the agent's terminal_create/input/key
+	 *  (user-opened terminals never participate in silence nudges). Also the "current
+	 *  epoch is still armed" flag: cleared after the watchdog fires once; the next
+	 *  agent touch restarts the timer. */
 	agentTouched: boolean;
-	/** 最后一次 PTY 输出 / 输入写入的时刻——静默时长以它为基准。 */
+	/** Timestamp of the last PTY output / input write — silence duration is measured from this. */
 	lastActivityAt: number;
-	/** 静默看门狗 timer；null = 未武装。 */
+	/** Silence-watchdog timer; null = disarmed. */
 	idleTimer: ReturnType<typeof setTimeout> | null;
-	/** 输出观察器（终端接管 bash 的完成检测）：注册后在 appendOutput 里累积
-	 *  新数据并匹配正则；命中或终端退出时回调一次即移除。buf 从注册时刻累积。 */
+	/** Output watchers (completion detection for terminal-backed bash): after register,
+	 *  accumulate new data in appendOutput and match a regex; callback once on hit or
+	 *  terminal exit, then remove. buf accumulates from the moment of registration. */
 	watches: { re: RegExp; buf: string; cb: (m: RegExpMatchArray | null) => void }[];
-	/** true = 终端接管 bash 刚发出一条带哨兵的命令且尚未结束（terminal_wait
-	 *  用它区分「有命令在跑」和「shell 空闲在提示符」——后者等哨兵永远等不到）。 */
+	/** true = terminal-backed bash just issued a sentinel-bearing command that has not
+	 *  finished yet (terminal_wait uses this to tell "a command is running" from "shell
+	 *  idle at the prompt" — waiting for a sentinel in the latter case never completes). */
 	sentinelPending?: boolean;
 }
 
@@ -184,9 +187,10 @@ const MAX_INPUT = 64 * 1024;
 const MAX_ID = 80;
 
 /**
- * 终端活力检测阈值：agent 触碰过的终端连续静默这么久且该对话正在运行时，
- * 通过 onAgentIdle 回调通知宿主（宿主注入一条 steer 消息唤醒 AI 去检查）。
- * PI_WEB_TERMINAL_IDLE_MS 覆盖；0 = 关闭检测。每次调用时读取（测试可注入）。
+ * Terminal-liveness threshold: when a terminal the agent has touched is silent
+ * this long continuously and the conversation is running, notify the host via
+ * onAgentIdle (the host injects a steer so the AI goes and checks).
+ * Overridden by PI_WEB_TERMINAL_IDLE_MS; 0 = disable. Read on every call (tests can inject).
  */
 export function terminalIdleNotifyMs(): number {
 	const raw = Number(process.env.PI_WEB_TERMINAL_IDLE_MS);
@@ -194,19 +198,23 @@ export function terminalIdleNotifyMs(): number {
 }
 
 // ---------------------------------------------------------------------------
-// 终端接管 bash（terminal-backed bash tool）
+// Terminal-backed bash tool
 // ---------------------------------------------------------------------------
 
-/** 哨兵行：命令执行完后由 shell 打印，携带真实退出码。正则只匹配数字，
- *  因此不会误匹配回显里的 printf 格式串 `[pi-exit:%s]`。 */
+/** Sentinel line: printed by the shell after the command finishes, carrying the real
+ *  exit code. The regex matches digits only, so it will not false-match the printf
+ *  format string `[pi-exit:%s]` in the echo. */
 const BASH_SENTINEL_RE = /\[pi-exit:(\d+)\]/g;
 
 /**
- * 把任意命令（含多行脚本）构造成「一行」交互 shell 命令：执行 + 捕获退出码。
+ * Turn an arbitrary command (including a multi-line script) into a single-line
+ * interactive shell command: execute + capture the exit code.
  *
- * 单行很关键：整行先被 shell 完整解析再执行，命令中途读 stdin 也不会吃掉
- * 后续哨兵；也避开交互 shell 的 bracketed-paste 对多行输入的特殊处理。
- * 多行脚本用 `$'...'` ANSI-C 引号转义后交给 eval（bash/zsh/busybox ash 都支持）。
+ * A single line is essential: the whole line is fully parsed by the shell before
+ * it runs, so a command that reads stdin mid-way will not consume the following
+ * sentinel; it also avoids the interactive shell's bracketed-paste handling of
+ * multi-line input. Multi-line scripts are ANSI-C quoted with `$'...'` and handed
+ * to eval (supported by bash / zsh / busybox ash).
  */
 export function buildTerminalBashLine(command: string): string {
 	const trimmed = command.replace(/\s+$/, "");
@@ -222,22 +230,22 @@ export function buildTerminalBashLine(command: string): string {
 	return `${body}; __pi_rc=$?; printf '\\n[pi-exit:%s]\\n' "$__pi_rc"`;
 }
 
-/** 去掉 ANSI 转义序列（OSC/CSI/其余 ESC 序列）与孤立 CR（进度条重绘），
- *  让 PTY 回显变成 bash 工具风格的纯文本。 */
+/** Strip ANSI escape sequences (OSC/CSI/other ESC sequences) and lone CRs (progress-bar
+ *  redraws) so PTY echo becomes bash-tool-style plain text. */
 export function stripAnsi(s: string): string {
 	return s
-		.replace(/\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g, "") // OSC（标题/超链接等）
-		.replace(/\x1b\[[0-9;?]*[ -/]*[@-~]/g, "") // CSI（颜色/光标/清屏等）
-		.replace(/\x1b[@-_]/g, "") // 其余单字符 ESC 序列
-		.replace(/\r(?!\n)/g, ""); // 孤立 CR（进度条原地重绘）
+		.replace(/\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g, "") // OSC (title / hyperlinks, etc.)
+		.replace(/\x1b\[[0-9;?]*[ -/]*[@-~]/g, "") // CSI (color / cursor / clear, etc.)
+		.replace(/\x1b[@-_]/g, "") // remaining single-char ESC sequences
+		.replace(/\r(?!\n)/g, ""); // lone CR (in-place progress-bar redraw)
 }
 
-/** 截断过长的工具结果：保留头尾，中间省略。 */
+/** Truncate an overly long tool result: keep head and tail, omit the middle. */
 function truncateMiddle(text: string, max = 30_000): string {
 	if (text.length <= max) return text;
 	const head = Math.floor(max * 0.3);
 	const tail = max - head;
-	return `${text.slice(0, head)}\n…（中间省略 ${text.length - max} 字符）…\n${text.slice(-tail)}`;
+	return `${text.slice(0, head)}\n…(${text.length - max} characters omitted)…\n${text.slice(-tail)}`;
 }
 
 /** `-i` makes bash interactive; cmd.exe / powershell.exe are interactive on their own. */
@@ -249,7 +257,7 @@ function bashArgs(shell: string): string[] {
  * Interactive shell for PTYs.
  * - Windows: prefer bash — it matches the SDK's bash tool, so the agent and
  *   the terminal speak the same shell language (no more PowerShell/bash
- *   混用 that leaves heredocs / `&&` / `<<` hanging or erroring). Order:
+ *   mix that leaves heredocs / `&&` / `<<` hanging or erroring). Order:
  *   1. PI_WEB_SHELL (explicit override)
  *   2. $SHELL when it exists on disk (user launched from a Git Bash session)
  *   3. Git Bash install paths (ProgramFiles / ProgramFiles(x86))
@@ -312,7 +320,7 @@ function resolveBashShell(): { shell: string; args: string[] } {
  * Environment for spawned shells. System services (launchd/systemd) run with
  * no locale variables, which puts the shell in the C locale: its line editor
  * then renders UTF-8 continuation bytes 0x80–0x9F as C1 control characters
- * (e.g. `�<0091><0098>` for 员), garbling Chinese input in the terminal.
+ * (e.g. `�<0091><0098>` for U+5458), garbling CJK input in the terminal.
  * Default a UTF-8 locale so multibyte text round-trips.
  */
 function shellEnv(): Record<string, string> {
@@ -417,11 +425,11 @@ function brokenSpawnHelper(): string {
 // from a terminal app that already holds the camera grant. Detect the
 // "no GUI ancestor" case (ppid === 1 on macOS) and warn in the terminal.
 const TCC_HINT = [
-	"\x1b[33m[提示] 本终端由后台服务（launchd）启动，macOS 隐私权限（相机/麦克风/屏幕录制等）对此类进程不可用。\x1b[0m",
-	"\x1b[90m  · 需要隐私权限的命令会被系统静默拒绝：不弹授权窗，系统设置里也无法勾选，表现多为卡死或无输出。",
-	"  · 这类任务请在你自己已授权的前台终端里运行。",
-	"  · 本终端内可运行不需要隐私权限的命令（如文件处理、网络请求、远程设备流）。",
-	"  · 若改在前台终端里运行 pi-web-ui，本提示即不再出现。\x1b[0m",
+	"\x1b[33m[note] This terminal was started by a background service (launchd). macOS privacy permissions (camera/mic/screen) are unavailable to it.\x1b[0m",
+	"\x1b[90m  · Commands that need privacy permissions are silently denied: no prompt, nothing to tick in System Settings, often hangs with no output.",
+	"  · Run those in a foreground terminal you have already authorized.",
+	"  · Commands that do not need privacy permissions (files, network, remote streams) are fine here.",
+	"  · If you run pi-web-ui in a foreground terminal, this note will not appear.\x1b[0m",
 ].join("\r\n") + "\r\n";
 
 /** True when this server was spawned by launchd (or orphaned) on macOS — no GUI app in the ancestry, so camera/mic TCC grants are unavailable. */
@@ -459,7 +467,7 @@ export function encodeTerminalKey(
 		PageUp: "\x1b[5~", PageDown: "\x1b[6~", F1: "\x1bOP", F2: "\x1bOQ", F3: "\x1bOR", F4: "\x1bOS",
 	};
 	let data = named[key] ?? (key.length === 1 ? key : "");
-	if (!data) return { error: `不支持的终端按键：${key}` };
+	if (!data) return { error: `Unsupported terminal key: ${key}` };
 	// xterm modifier encoding: 1=plain, 2=Shift, 3=Alt, 5=Ctrl,
 	// 6=Ctrl+Shift, 7=Ctrl+Alt, 8=Ctrl+Alt+Shift.
 	const modifier = 1 + (modifiers.shift ? 1 : 0) + (modifiers.alt ? 2 : 0) + (modifiers.ctrl ? 4 : 0);
@@ -479,10 +487,10 @@ export function encodeTerminalKey(
 		data = `\x1b[${namedCode[key]};${modifier}u`;
 	} else {
 		if (modifiers.ctrl) {
-			if (key.length !== 1) return { error: `Ctrl 组合键无效：${key}` };
+			if (key.length !== 1) return { error: `Invalid Ctrl combo: ${key}` };
 			const code = key.toUpperCase().charCodeAt(0);
 			if (code >= 64 && code <= 95) data = String.fromCharCode(code - 64);
-			else return { error: `Ctrl 组合键无效：${key}` };
+			else return { error: `Invalid Ctrl combo: ${key}` };
 		} else if (modifiers.shift && key.length === 1) {
 			data = key.toUpperCase();
 		}
@@ -505,8 +513,9 @@ export class TerminalManager {
 	private seq = 0;
 	private tccHintShown = false;
 
-	/** 宿主回调：AI 触碰过的终端静默 ≥ 阈值时触发（一次性/纪元语义见
-	 *  noteAgentActivity）。宿主自行判断会话是否在运行并决定是否注入。 */
+	/** Host callback: fired when a terminal the AI has touched is silent ≥ the threshold
+	 *  (one-shot / epoch semantics: see noteAgentActivity). The host decides whether the
+	 *  session is running and whether to inject. */
 	onAgentIdle: ((terminalId: string, idleMs: number, title: string) => void) | null = null;
 
 	constructor(
@@ -538,7 +547,7 @@ export class TerminalManager {
 		this.history.delete(id);
 		const safeCwd = this.safeCwd(cwd || fallbackCwd);
 		if (!safeCwd) {
-			this.fail(id, "终端工作目录必须位于当前工作区内");
+			this.fail(id, "Terminal cwd must be inside the current workspace");
 			return null;
 		}
 		if (
@@ -547,7 +556,7 @@ export class TerminalManager {
 				safeCwd,
 				cols,
 				rows,
-				title || `终端 ${++this.seq}`,
+				title || `Terminal ${++this.seq}`,
 				undefined,
 				opts?.forceBash,
 			)
@@ -595,9 +604,9 @@ export class TerminalManager {
 		const rawDir = resolveCommandCwd(def.cwd, pwd);
 		const dir = this.safeCwd(rawDir);
 		const command = expandPwd(def.command.trim(), pwd);
-		const title = def.name || command || `终端 ${++this.seq}`;
+		const title = def.name || command || `Terminal ${++this.seq}`;
 		if (!dir) {
-			this.fail(id, "终端工作目录必须位于当前工作区内");
+			this.fail(id, "Terminal cwd must be inside the current workspace");
 			return;
 		}
 
@@ -650,11 +659,11 @@ export class TerminalManager {
 		else if (!isAbsolute(abs)) abs = resolve(abs);
 		try {
 			if (!existsSync(abs) || !statSync(abs).isDirectory()) {
-				this.fail(id, `目录不存在或不是目录：${abs}`);
+				this.fail(id, `Not a directory: ${abs}`);
 				return false;
 			}
 		} catch {
-			this.fail(id, `无法访问终端目录：${abs}`);
+			this.fail(id, `Cannot access terminal directory: ${abs}`);
 			return false;
 		}
 		// node-pty's spawn-helper may have lost its +x bit since the last repair
@@ -675,8 +684,8 @@ export class TerminalManager {
 			this.fail(
 				id,
 				helper
-					? `启动终端失败：${(err as Error).message}（node-pty 的 spawn-helper 缺少执行权限，请运行：chmod +x "${helper}"）`
-					: `启动终端失败：${(err as Error).message}`,
+					? `Failed to start terminal: ${(err as Error).message} (node-pty spawn-helper is not executable; run: chmod +x "${helper}")`
+					: `Failed to start terminal: ${(err as Error).message}`,
 			);
 			return false;
 		}
@@ -722,13 +731,16 @@ export class TerminalManager {
 	}
 
 	/**
-	 * 记录一次 agent 工具触碰并启动一个新的静默纪元（terminal_create /
-	 * terminal_input / terminal_key 的工具包装层调用——浏览器路径绝不调用，
-	 * 用户自己开的终端永远不会收到静默提醒）。
+	 * Record an agent-tool touch and start a new silence epoch (called from the
+	 * tool wrappers of terminal_create / terminal_input / terminal_key — the
+	 * browser path must never call this, so a user-opened terminal never gets a
+	 * silence nudge).
 	 *
-	 * 纪元语义（防骚扰）：agentTouched 同时是「纪元武装」标志。看门狗触发
-	 * 一次后即解除武装，之后无论静默多久都不再提醒，直到 agent 再次触碰
-	 * （再发输入 = AI 又在等结果了）。纪元内的每一段输出都重置倒计时。
+	 * Epoch semantics (anti-nag): agentTouched is also the "epoch armed" flag.
+	 * After the watchdog fires once it disarms; however long the silence lasts
+	 * afterwards there is no further nudge until the agent touches again
+	 * (sending more input = the AI is waiting on a result again). Every chunk
+	 * of output within the epoch resets the countdown.
 	 */
 	noteAgentActivity(id: string): void {
 		const entry = this.terms.get(id);
@@ -738,7 +750,7 @@ export class TerminalManager {
 		this.armIdleWatch(entry);
 	}
 
-	/** 武装（或按当前 lastActivityAt 重置）静默看门狗。 */
+	/** Arm (or reset from the current lastActivityAt) the silence watchdog. */
 	private armIdleWatch(entry: TermEntry): void {
 		if (entry.idleTimer) {
 			clearTimeout(entry.idleTimer);
@@ -749,9 +761,9 @@ export class TerminalManager {
 		const delay = Math.max(0, idleMs - (Date.now() - entry.lastActivityAt));
 		entry.idleTimer = setTimeout(() => {
 			entry.idleTimer = null;
-			// 原地重启/退出后旧 entry 的事件必须忽略（与 onData/onExit 同款守卫）。
+			// After an in-place restart/exit, events from the old entry must be ignored (same guard as onData/onExit).
 			if (this.terms.get(entry.id) !== entry || entry.exited) return;
-			// 一次性：触发后解除武装，直到下次 agent 触碰。
+			// One-shot: disarm after firing until the next agent touch.
 			entry.agentTouched = false;
 			this.onAgentIdle?.(entry.id, Date.now() - entry.lastActivityAt, entry.title);
 		}, delay);
@@ -795,10 +807,10 @@ export class TerminalManager {
 		}
 		for (const wake of entry.waiters) wake();
 		entry.waiters.clear();
-		// 纪元内的输出重置静默倒计时。
+		// Output within the epoch resets the silence countdown.
 		entry.lastActivityAt = Date.now();
 		if (entry.idleTimer) this.armIdleWatch(entry);
-		// 输出观察器：累积匹配，命中一次即移除（终端接管 bash 的完成检测）。
+		// Output watchers: accumulate and match; remove on first hit (completion detection for terminal-backed bash).
 		if (entry.watches.length > 0) {
 			type Watch = (typeof entry.watches)[number];
 			const remaining: Watch[] = [];
@@ -808,7 +820,7 @@ export class TerminalManager {
 				if (w.buf.length > 64_000) w.buf = w.buf.slice(-32_000);
 				w.re.lastIndex = 0;
 				const m = w.re.exec(w.buf);
-				if (m) hits.push({ w, m }); // 命中 → 移出（cb 在下面统一触发）
+				if (m) hits.push({ w, m }); // hit → remove (cb fired together below)
 				else remaining.push(w);
 			}
 			entry.watches = remaining;
@@ -818,7 +830,7 @@ export class TerminalManager {
 
 	private validateId(id: string): string | null {
 		if (!id || id.length > MAX_ID || !/^[A-Za-z0-9._:-]+$/.test(id)) {
-			return "终端名称无效：只能使用字母、数字、.-、_ 或 :（最长 80 字符）";
+			return "Invalid terminal name: letters, digits, .-, _ or : only (max 80 chars)";
 		}
 		return null;
 	}
@@ -833,7 +845,7 @@ export class TerminalManager {
 	private ensureSpawnAllowed(id: string): boolean {
 		if (this.terms.has(id)) return true;
 		if (this.terms.size >= MAX_TERMINALS) {
-			this.fail(id, `终端数量已达上限（${MAX_TERMINALS}）`);
+			this.fail(id, `Terminal limit reached (${MAX_TERMINALS})`);
 			return false;
 		}
 		return true;
@@ -918,10 +930,10 @@ export class TerminalManager {
 	}
 
 	inputChecked(id: string, data: string): string | null {
-		if (data.length > MAX_INPUT) return `输入过长（上限 ${MAX_INPUT} 字符）`;
+		if (data.length > MAX_INPUT) return `Input too long (max ${MAX_INPUT} chars)`;
 		const entry = this.terms.get(id);
-		if (!entry || entry.exited) return "终端不存在或进程已退出";
-		// 已武装的纪元里任何人（含用户手动敲键盘）写了输入都算新活动，重置倒计时。
+		if (!entry || entry.exited) return "Terminal does not exist or the process has exited";
+		// In an armed epoch, anyone writing input (including the user typing) counts as new activity and resets the countdown.
 		entry.lastActivityAt = Date.now();
 		if (entry.idleTimer) this.armIdleWatch(entry);
 		entry.pty.write(data);
@@ -935,7 +947,7 @@ export class TerminalManager {
 	}
 
 
-	/** 解除静默看门狗（退出/关闭/全部停止时）。 */
+	/** Disarm the silence watchdog (on exit / close / stop-all). */
 	private disarmIdleWatch(entry: TermEntry): void {
 		if (entry.idleTimer) {
 			clearTimeout(entry.idleTimer);
@@ -944,7 +956,7 @@ export class TerminalManager {
 		entry.agentTouched = false;
 	}
 
-	/** 只拆钟不清标记（终端接管 bash 阻塞期间挂起活力提醒，避免双重通知）。 */
+	/** Tear down the timer without clearing the flag (suspend liveness nudges while terminal-backed bash is blocked, to avoid a double notify). */
 	suspendIdleWatch(id: string): void {
 		const entry = this.terms.get(id);
 		if (!entry || !entry.idleTimer) return;
@@ -952,7 +964,7 @@ export class TerminalManager {
 		entry.idleTimer = null;
 	}
 
-	/** 输出末尾的绝对 cursor（terminal-backed bash 的读取起点）。 */
+	/** Absolute cursor at the end of output (read start for terminal-backed bash). */
 	endCursor(id: string): number | null {
 		const entry = this.find(id);
 		if (!entry) return null;
@@ -960,12 +972,14 @@ export class TerminalManager {
 	}
 
 	/**
-	 * 阻塞等待当前前台命令结束（哨兵行出现或终端退出）。terminal_wait 工具
-	 * 用它在静默解阻后「重新加入等待」——AI 不必反复 terminal_read 轮询。
+	 * Block until the current foreground command finishes (sentinel appears or the
+	 * terminal exits). terminal_wait uses this to "rejoin the wait" after a silence
+	 * unblock — the AI does not have to poll with terminal_read.
 	 *
-	 * @param afterCursor 只认该绝对偏移之后的哨兵（排除上一条命令残留的旧标记；
-	 *                    调用方传 endCursor() 即表示「等我调用之后才出现的结束」）
-	 * @returns finished=false 表示超时/中止（命令仍在跑），可再次调用继续等
+	 * @param afterCursor only accept a sentinel after this absolute offset (exclude
+	 *                    leftover markers from the previous command; passing endCursor()
+	 *                    means "wait for an end that appears after I called")
+	 * @returns finished=false means timeout/abort (the command is still running); call again to keep waiting
 	 */
 	async waitForCompletion(
 		id: string,
@@ -976,7 +990,7 @@ export class TerminalManager {
 		const entry = this.find(id);
 		if (!entry) return { finished: false, exitCode: null };
 		return new Promise((resolve) => {
-			// 命令可能在调用前就已结束：先扫 afterCursor 之后的存量缓冲。
+			// The command may already have finished before this call: first scan the existing buffer after afterCursor.
 			const relStart = Math.max(0, afterCursor - entry.outputOffset);
 			const segment = entry.output.slice(relStart);
 			const scan = new RegExp(BASH_SENTINEL_RE.source, BASH_SENTINEL_RE.flags);
@@ -1003,7 +1017,7 @@ export class TerminalManager {
 				resolve(r);
 			};
 			unwatch = this.watchOutput(id, BASH_SENTINEL_RE, (m) => {
-				// m=null = 终端被关闭/退出 → 命令肯定结束了（退出码未知）。
+				// m=null = the terminal was closed/exited → the command has definitely finished (exit code unknown).
 				done({ finished: true, exitCode: m ? Number(m[1]) : null });
 			});
 			timer = setTimeout(
@@ -1015,18 +1029,18 @@ export class TerminalManager {
 		});
 	}
 
-	/** 标记/清除「哨兵待决」状态（终端接管 bash 工具专用）。 */
+	/** Set/clear the "sentinel pending" flag (terminal-backed bash tool only). */
 	setSentinelPending(id: string, pending: boolean): void {
 		const entry = this.find(id);
 		if (entry) entry.sentinelPending = pending;
 	}
 
-	/** 是否有带哨兵的命令尚未结束（terminal_wait 的适用性判断）。 */
+	/** Whether a sentinel-bearing command has not finished yet (applicability check for terminal_wait). */
 	isSentinelPending(id: string): boolean {
 		return this.find(id)?.sentinelPending === true;
 	}
 
-	/** 注册一次性输出观察器：命中 re 或终端退出时回调一次。返回注销函数。 */
+	/** Register a one-shot output watcher: callback once on matching re or terminal exit. Returns an unsubscribe. */
 	watchOutput(
 		id: string,
 		re: RegExp,
@@ -1037,7 +1051,7 @@ export class TerminalManager {
 			cb(null);
 			return () => {};
 		}
-		// 每个观察器独立 regex 实例（global 正则的 lastIndex 是共享可变状态）。
+		// Each watcher gets its own regex instance (a global regex's lastIndex is shared mutable state).
 		const own = new RegExp(re.source, re.flags);
 		const watch = { re: own, buf: "", cb };
 		entry.watches.push(watch);
@@ -1066,11 +1080,11 @@ export class TerminalManager {
 		this.disarmIdleWatch(entry);
 		// Flush queued output BEFORE the exit banner so ordering is preserved.
 		this.flushPending(entry);
-		const banner = `\r\n\x1b[90m[进程已退出，退出码 ${exitCode}]\x1b[0m\r\n`;
+		const banner = `\r\n\x1b[90m[process exited, code ${exitCode}]\x1b[0m\r\n`;
 		this.appendOutput(entry, banner);
 		this.emit({ type: "terminal_output", terminalId: id, data: banner });
 		entry.exited = true;
-		// 终端退出 → 未命中的输出观察器以 null 回调（宿主可据此通知「终端已关闭」）。
+		// Terminal exit → unmatched output watchers are called back with null (the host can notify "terminal closed").
 		const pendingWatches = entry.watches;
 		entry.watches = [];
 		for (const w of pendingWatches) w.cb(null);
@@ -1154,31 +1168,33 @@ export class TerminalManager {
 }
 
 // ---------------------------------------------------------------------------
-// 终端接管 bash：bash 风格工具跑在持久可见终端里
+// Terminal-backed bash: a bash-style tool that runs inside a persistent visible terminal
 // ---------------------------------------------------------------------------
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
-/** 取 collected 尾部里最后一个哨兵匹配（哨兵只可能出现在新输出的尾部）。 */
+/** Last sentinel match in the tail of collected (a sentinel can only appear at the end of new output). */
 function lastSentinel(collected: string): RegExpMatchArray | null {
 	const tail = collected.length > 8000 ? collected.slice(-8000) : collected;
 	BASH_SENTINEL_RE.lastIndex = 0;
 	return [...tail.matchAll(BASH_SENTINEL_RE)].pop() ?? null;
 }
 
-/** 去掉输入回显、哨兵及其后的 shell 提示符垃圾与 ANSI 序列，还原 bash 风格纯文本。 */
+/** Strip input echo, the sentinel, following shell-prompt junk, and ANSI sequences, restoring bash-style plain text. */
 function cleanBashOutput(raw: string): string {
 	let text = stripAnsi(raw).replace(/\r\n/g, "\n");
-	// 回显的命令行可能被 readline 折行拆成多行，按行剥不可靠——改为锚定
-	// printf 格式串字面量 [pi-exit:%s]（真哨兵是数字版），连同其所在整行丢弃。
-	// 注意：同一命令会被回显两次（PTY 输入回显 + readline 提示符回显），需循环。
+	// The echoed command line may be wrapped by readline into multiple lines, so
+	// stripping by line is unreliable — instead anchor on the printf format
+	// literal [pi-exit:%s] (the real sentinel is the numeric version) and drop
+	// the whole line it sits on. Note: the same command is echoed twice (PTY
+	// input echo + readline prompt echo), so this must loop.
 	for (;;) {
 		const fmtIdx = text.indexOf("[pi-exit:%s]");
 		if (fmtIdx < 0) break;
 		const nl = text.indexOf("\n", fmtIdx);
 		text = nl >= 0 ? text.slice(nl + 1) : "";
 	}
-	// 最后一个哨兵之后的内容全是 shell 新提示符——整段截掉。
+	// Everything after the last sentinel is the shell's new prompt — chop the whole tail.
 	BASH_SENTINEL_RE.lastIndex = 0;
 	let last: RegExpExecArray | null = null;
 	for (let m = BASH_SENTINEL_RE.exec(text); m; m = BASH_SENTINEL_RE.exec(text)) {
@@ -1191,28 +1207,34 @@ function cleanBashOutput(raw: string): string {
 }
 
 /**
- * 终端接管的 bash 工具：模型看到的参数与 SDK bash 完全一致（command + 可选
- * timeout 秒），但执行体是往持久终端写命令并等哨兵行拿到真实退出码。
+ * Terminal-backed bash tool: the parameters the model sees are identical to SDK
+ * bash (command + optional timeout seconds), but the implementation writes the
+ * command into a persistent terminal and waits for the sentinel line to get the
+ * real exit code.
  *
- * 行为语义：
- * - 默认阻塞：等到命令结束才返回完整输出（ANSI 已清理）+ 真实退出码；
- * - 静默解阻：连续 idleMs 毫秒无新输出且未结束 → 立即返回「仍在运行」+ 已有
- *   输出，命令留在终端里继续跑，并注册完成观察器——结束后由宿主
- *   notifyBackgroundDone 主动通知 AI（流式中 steer / 空闲时 nextTurn）；
- * - abort_bash 支持：AbortController 注册进 kills 集合，abort 时向 PTY 发
- *   Ctrl+C 杀前台进程，对话继续（与 makeKillableBashTool 同一套集合）；
- * - shell 状态跨调用保留（cd / venv activate / ssh 会话）——这是原生 bash
- *   工具做不到的。
+ * Behavior:
+ * - Block by default: wait until the command finishes, then return the full
+ *   output (ANSI stripped) + real exit code;
+ * - Silence unblock: idleMs milliseconds of no new output and still not finished
+ *   → immediately return "still running" + output so far; the command keeps
+ *   running in the terminal, a completion watcher is registered, and the host
+ *   notifies the AI via notifyBackgroundDone when it ends (steer mid-stream /
+ *   nextTurn when idle);
+ * - abort_bash: AbortController is registered in the kills set; abort sends
+ *   Ctrl+C to the PTY to kill the foreground process; the conversation continues
+ *   (same set as makeKillableBashTool);
+ * - Shell state is kept across calls (cd / venv activate / ssh session) — something
+ *   the native bash tool cannot do.
  */
 export function makeTerminalBashTool(
 	terminals: TerminalManager,
 	opts: {
 		cwd: string;
-		/** 静默解阻阈值毫秒；每次调用时读取（设置即时生效）；0 = 不解阻。 */
+		/** Silence-unblock threshold in ms; read on every call (setting takes effect immediately); 0 = never unblock. */
 		idleMs: () => number;
-		/** abort_bash 的控制器集合。 */
+		/** abort_bash controller set. */
 		kills: Set<AbortController>;
-		/** 后台命令最终结束时的宿主通知（exitCode null = 终端被关闭）。 */
+		/** Host notification when a background command finally ends (exitCode null = the terminal was closed). */
 		notifyBackgroundDone: (info: {
 			terminalId: string;
 			command: string;
@@ -1243,17 +1265,18 @@ export function makeTerminalBashTool(
 			),
 		}),
 		execute: async (_id, p, signal) => {
-			// create() 对已存活的同名终端原样返回、对已退出的原地重启。
-			// forceBash：该终端永远跑 bash（而非用户登录 shell），模型写的
-			// bash 语法（数组/read -p/process substitution…）不会踩 zsh 差异。
+			// create() returns a still-alive same-name terminal as-is, and in-place
+			// restarts one that has already exited. forceBash: this terminal always
+			// runs bash (not the user's login shell), so bash syntax the model writes
+			// (arrays / read -p / process substitution…) will not trip zsh differences.
 			if (
 				terminals.create(TERM_ID, opts.cwd, 120, 40, opts.cwd, "AI bash", {
 					forceBash: true,
 				}) === null
 			) {
-				throw new Error(`无法打开 AI bash 终端（${TERM_ID}）`);
+				throw new Error(`Cannot open AI bash terminal (${TERM_ID})`);
 			}
-			// 阻塞等待期间挂起活力提醒（我们自己在检测静默，避免双重通知）。
+			// Suspend liveness nudges while we are blocked waiting (we are detecting silence ourselves, to avoid a double notify).
 			terminals.suspendIdleWatch(TERM_ID);
 			const start = terminals.endCursor(TERM_ID)!;
 			const ac = new AbortController();
@@ -1261,26 +1284,27 @@ export function makeTerminalBashTool(
 			const idleMs = Math.max(0, opts.idleMs());
 			const deadline =
 				p.timeout && p.timeout > 0 ? Date.now() + p.timeout * 1000 : null;
-			// tail 参数：只返回末尾 N 行（替代 `| tail -N` 管道——管道会缓冲输出、
-			// 让可见终端全程哑火，还容易白白触发静默解阻）。
+			// tail parameter: return only the last N lines (instead of a `| tail -N`
+			// pipe — a pipe buffers output, leaves the visible terminal mute the whole
+			// time, and easily trips a wasted silence-unblock).
 			const applyTail = (t: string): string => {
 				if (!p.tail || p.tail <= 0) return t;
 				const lines = t.split("\n");
 				return lines.length > p.tail
-					? `…（前 ${lines.length - p.tail} 行已省略）\n${lines.slice(-p.tail).join("\n")}`
+					? `…(${lines.length - p.tail} earlier lines omitted)\n${lines.slice(-p.tail).join("\n")}`
 					: t;
 			};
 			try {
 				let collected = "";
 				let cursor = start;
 				let lastDataAt = Date.now();
-				// 标记「有哨兵命令在跑」：terminal_wait 据此区分等待与空闲。
+				// Mark "a sentinel command is running": terminal_wait uses this to tell waiting from idle.
 				terminals.setSentinelPending(TERM_ID, true);
 				const inputErr = terminals.inputChecked(TERM_ID, buildTerminalBashLine(p.command) + "\r");
 				if (inputErr) throw new Error(inputErr);
 				for (;;) {
 					if (ac.signal.aborted || signal?.aborted) {
-						// Ctrl+C 杀前台进程；终端本身保留（会话状态还在）。
+						// Ctrl+C kills the foreground process; the terminal itself is kept (session state is still there).
 						terminals.setSentinelPending(TERM_ID, false);
 						terminals.inputChecked(TERM_ID, "\x03");
 						throw new Error("Command aborted");
@@ -1310,10 +1334,10 @@ export function makeTerminalBashTool(
 						terminals.setSentinelPending(TERM_ID, false);
 						terminals.inputChecked(TERM_ID, "\x03");
 						throw new Error(
-							`Command timed out after ${p.timeout}s（已发 Ctrl+C；已有输出：${truncateMiddle(stripAnsi(collected), 4000)}）`,
+							`Command timed out after ${p.timeout}s (sent Ctrl+C; output so far: ${truncateMiddle(stripAnsi(collected), 4000)})`,
 						);
 					}
-					// 静默解阻：转后台 + 注册完成观察器，立即把控制权还给模型。
+					// Silence unblock: background it + register a completion watcher, then immediately return control to the model.
 					if (idleMs > 0 && Date.now() - lastDataAt >= idleMs) {
 						return backgroundResult(
 							terminals,
@@ -1331,7 +1355,7 @@ export function makeTerminalBashTool(
 	});
 }
 
-/** 静默解阻路径：注册完成观察器后立即返回「仍在后台运行」。 */
+/** Silence-unblock path: after registering a completion watcher, immediately return "still running in the background". */
 function backgroundResult(
 	terminals: TerminalManager,
 	opts: Parameters<typeof makeTerminalBashTool>[1],
@@ -1340,7 +1364,7 @@ function backgroundResult(
 	silentSeconds: number,
 ): { content: { type: "text"; text: string }[]; details: unknown } {
 	terminals.watchOutput("ai-bash", BASH_SENTINEL_RE, (m) => {
-		// 后台命令最终结束（或终端被关）→ 清除待决标记，terminal_wait 不再适用。
+		// Background command finally ended (or the terminal was closed) → clear the pending flag; terminal_wait no longer applies.
 		terminals.setSentinelPending("ai-bash", false);
 		opts.notifyBackgroundDone({
 			terminalId: "ai-bash",
@@ -1348,24 +1372,24 @@ function backgroundResult(
 			exitCode: m ? Number(m[1]) : null,
 		});
 	});
-	// partialText 已在调用方做过 cleanBashOutput + applyTail。
+	// partialText has already been through cleanBashOutput + applyTail at the caller.
 	const partial = truncateMiddle(partialText, 6000);
 	return {
 		content: [
 			{
 				type: "text",
 				text:
-					`命令仍在持久终端 ai-bash 中运行（已连续 ${silentSeconds} 秒无输出，未结束）。` +
-					`本次调用不阻塞——命令继续在后台执行，结束时你会收到自动通知。\n` +
-					`已有输出：\n${partial || "（暂无输出）"}\n` +
-					`要重新阻塞等它结束就用 terminal_wait(terminalId="ai-bash")（无需反复轮询）；需要交互用 terminal_input / terminal_key（Ctrl+C 可终止）。`,
+					`Command is still running in persistent terminal ai-bash (no output for ${silentSeconds}s, not finished).` +
+					`This call is not blocking — it keeps running in the background and you will be notified when it finishes.\n` +
+					`Output so far:\n${partial || "(none yet)"}\n` +
+					`To wait until it finishes, call terminal_wait(terminalId="ai-bash") (no polling). For input use terminal_input / terminal_key (Ctrl+C to stop).`,
 			},
 		],
 		details: { running: true, terminalId: "ai-bash", silentSeconds },
 	};
 }
 
-/** Names of the agent-facing persistent-terminal tools（设置开关门控用）。 */
+/** Names of the agent-facing persistent-terminal tools (used by the settings toggle gate). */
 export const TERMINAL_TOOL_NAMES = [
 	"terminal_create",
 	"terminal_list",
@@ -1422,10 +1446,10 @@ export function makePersistentTerminalTools(
 					cwd,
 					p.terminalId,
 				);
-				if (!info) throw new Error(`创建终端失败：${p.terminalId}`);
-				// AI 创建 → 启动活力检测纪元（静默提醒只针对 agent 触碰过的终端）。
+				if (!info) throw new Error(`Failed to create terminal: ${p.terminalId}`);
+				// AI created → start a liveness epoch (silence nudges only target terminals the agent has touched).
 				terminals.noteAgentActivity(p.terminalId);
-				return result(`终端已创建：${JSON.stringify(info)}`, info);
+				return result(`Terminal created: ${JSON.stringify(info)}`, info);
 			},
 		}),
 		defineTool({
@@ -1442,9 +1466,9 @@ export function makePersistentTerminalTools(
 			description: "Close a persistent PTY and terminate its process tree.",
 			parameters: Type.Object({ terminalId: Type.String() }),
 			execute: async (_id, p) => {
-				if (!terminals.has(p.terminalId)) throw new Error(`终端不存在：${p.terminalId}`);
+				if (!terminals.has(p.terminalId)) throw new Error(`Terminal not found: ${p.terminalId}`);
 				terminals.kill(p.terminalId);
-				return result(`终端已关闭：${p.terminalId}`);
+				return result(`Terminal closed: ${p.terminalId}`);
 			},
 		}),
 		defineTool({
@@ -1454,9 +1478,9 @@ export function makePersistentTerminalTools(
 			parameters: Type.Object({ terminalId: Type.String(), data: Type.String() }),
 			execute: async (_id, p) => {
 				failIf(terminals.inputChecked(p.terminalId, p.data));
-				// AI 发了输入 = 在等结果，重开一个静默纪元。
+				// AI sent input = waiting on a result; start a new silence epoch.
 				terminals.noteAgentActivity(p.terminalId);
-				return result(`已发送 ${p.data.length} 个字符到 ${p.terminalId}`);
+				return result(`Sent ${p.data.length} character(s) to ${p.terminalId}`);
 			},
 		}),
 		defineTool({
@@ -1474,9 +1498,9 @@ export function makePersistentTerminalTools(
 			}),
 			execute: async (_id, p) => {
 				failIf(terminals.key(p.terminalId, p.key, p.modifiers));
-				// 同 terminal_input：AI 主动交互后重新计时。
+				// Same as terminal_input: restart the timer after the AI actively interacts.
 				terminals.noteAgentActivity(p.terminalId);
-				return result(`已发送按键 ${p.key} 到 ${p.terminalId}`);
+				return result(`Sent key ${p.key} to ${p.terminalId}`);
 			},
 		}),
 		defineTool({
@@ -1493,7 +1517,7 @@ export function makePersistentTerminalTools(
 				const cursor = p.cursor ?? 0;
 				if (p.waitMs) await terminals.waitForOutput(p.terminalId, cursor, p.waitMs, signal);
 				const read = terminals.read(p.terminalId, cursor, p.maxBytes ?? 20000);
-				if (!read) throw new Error(`终端不存在：${p.terminalId}`);
+				if (!read) throw new Error(`Terminal not found: ${p.terminalId}`);
 				return result(JSON.stringify(read), read);
 			},
 		}),
@@ -1514,14 +1538,15 @@ export function makePersistentTerminalTools(
 			}),
 			execute: async (_id, p, signal) => {
 				if (!terminals.has(p.terminalId)) {
-					throw new Error(`终端不存在：${p.terminalId}（可能已被关闭或会话重置，请先 terminal_create）`);
+					throw new Error(`Terminal not found: ${p.terminalId} (closed or session reset; terminal_create first)`);
 				}
-				// 没有带哨兵的待决命令：shell 空闲在提示符，或该终端的命令是经
-				// terminal_input 手动发的（无完成标记）——等哨兵永远等不到，直接
-				// 说明并引导改用 terminal_read，避免 AI 无限重试。（显式传 cursor
-				// 的调用是有目的的追溯查询，不拦。）
+				// No pending sentinel-bearing command: the shell is idle at the prompt, or
+				// this terminal's command was sent by hand via terminal_input (no completion
+				// marker) — waiting for a sentinel would never finish. Explain that and
+				// steer toward terminal_read so the AI does not retry forever. (A call that
+				// explicitly passes cursor is a purposeful look-back and is not blocked.)
 				if (p.cursor === undefined && !terminals.isSentinelPending(p.terminalId)) {
-					const why = `终端 ${p.terminalId} 当前没有正在等待完成的 bash 工具命令（shell 空闲，或该命令是通过 terminal_input 发出的、没有完成标记）。terminal_wait 不适用；要观察输出请用 terminal_read(terminalId="${p.terminalId}", waitMs=…)。`;
+					const why = `Terminal ${p.terminalId} has no bash-tool command waiting to finish (idle shell, or the command was sent via terminal_input with no completion marker). terminal_wait does not apply; use terminal_read(terminalId="${p.terminalId}", waitMs=…).`;
 					return result(
 						JSON.stringify({ applicable: false, reason: why }),
 						{ applicable: false },

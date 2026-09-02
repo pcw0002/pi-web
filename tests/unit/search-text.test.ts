@@ -13,13 +13,13 @@ function msg(
 }
 
 describe("messageSearchText", () => {
-	it("拼接 text / thinking / toolCall / bash 各块", () => {
+	it("concatenates text / thinking / toolCall / bash blocks", () => {
 		const m = msg({
 			id: "a1",
 			role: "assistant",
 			content: [
-				{ type: "text", text: "你好世界" },
-				{ type: "thinking", thinking: "内部推理" },
+				{ type: "text", text: "hello world" },
+				{ type: "thinking", thinking: "internal reasoning" },
 				{
 					type: "toolCall",
 					id: "t1",
@@ -30,45 +30,45 @@ describe("messageSearchText", () => {
 			] as SearchMessage["content"],
 		});
 		const text = messageSearchText(m);
-		expect(text).toContain("你好世界");
-		expect(text).toContain("内部推理");
+		expect(text).toContain("hello world");
+		expect(text).toContain("internal reasoning");
 		expect(text).toContain("read");
 		expect(text).toContain("src/app.ts");
 		expect(text).toContain("ls -la");
 		expect(text).toContain("total 0");
 	});
 
-	it("toolResult 消息不进索引（无 DOM 跳转目标）", () => {
+	it("toolResult messages are not indexed (no DOM jump target)", () => {
 		const m = msg({
 			id: "t-1",
 			role: "toolResult",
-			content: [{ type: "text", text: "工具输出内容" }],
+			content: [{ type: "text", text: "tool output content" }],
 		});
 		expect(messageSearchText(m)).toBe("");
 	});
 
-	it("errorMessage 也参与搜索", () => {
+	it("errorMessage is also searchable", () => {
 		const m = msg({
 			id: "a2",
 			role: "assistant",
-			errorMessage: "boom 爆炸",
+			errorMessage: "boom explosion",
 		});
-		expect(messageSearchText(m)).toContain("爆炸");
+		expect(messageSearchText(m)).toContain("explosion");
 	});
 });
 
 describe("countOccurrences", () => {
-	it("大小写不敏感且统计重叠外的全部出现", () => {
+	it("case-insensitive and counts all non-overlapping occurrences", () => {
 		expect(countOccurrences("Ab ab AB", "ab")).toBe(3);
 		expect(countOccurrences("aaaa", "aa")).toBe(2);
 	});
-	it("空 needle 返回 0", () => {
+	it("empty needle returns 0", () => {
 		expect(countOccurrences("abc", "")).toBe(0);
 	});
 });
 
 describe("buildSearchHits", () => {
-	it("按对话顺序展开为每处命中一个条目", () => {
+	it("expands in conversation order to one entry per hit", () => {
 		const messages = [
 			msg({ id: "u1", role: "user", content: [{ type: "text", text: "foo bar foo" }] }),
 			msg({ id: "a1", role: "assistant", content: [{ type: "text", text: "no match" }] }),
@@ -82,7 +82,7 @@ describe("buildSearchHits", () => {
 		]);
 	});
 
-	it("空查询返回空列表；前后空白忽略", () => {
+	it("empty query returns empty list; surrounding whitespace ignored", () => {
 		const messages = [
 			msg({ id: "u1", role: "user", content: [{ type: "text", text: "abc" }] }),
 		];
@@ -91,7 +91,7 @@ describe("buildSearchHits", () => {
 		expect(buildSearchHits(messages, " abc ")).toHaveLength(1);
 	});
 
-	it("跳过 toolResult 与无内容消息", () => {
+	it("skips toolResult and empty-content messages", () => {
 		const messages = [
 			msg({ id: "t1", role: "toolResult", content: [{ type: "text", text: "abc abc" }] }),
 			msg({ id: "a1", role: "assistant", content: [] }),

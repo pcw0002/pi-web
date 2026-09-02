@@ -1,12 +1,12 @@
 /**
- * buildAttachmentMessages 单元测试（零 token、零 server）。
+ * buildAttachmentMessages unit tests (zero token, no server).
  *
- * 覆盖编辑重问的附件恢复管线：
- *   1. 新上传的 fileData → aside 卡 details.upload === true（供浏览器按路径恢复）；
- *   2. 恢复的 uploadPath → 服务端从 uploads 目录重读字节、按同路径附加；
- *   3. uploadPath 越出本客户端 uploads 目录 → 拒绝 + notice；
- *   4. uploadPath 指向已清理/不存在文件 → notice + 跳过；
- *   5. 工作区路径附件（reference/inline/lines）原样重附加。
+ * Covers the edit-and-reask attachment restore pipeline:
+ *   1. Newly uploaded fileData → aside card details.upload === true (browser restores by path);
+ *   2. Restored uploadPath → server re-reads bytes from the uploads dir and re-attaches at the same path;
+ *   3. uploadPath outside this client's uploads dir → reject + notice;
+ *   4. uploadPath points at a cleaned-up / missing file → notice + skip;
+ *   5. Workspace-path attachments (reference/inline/lines) re-attached as-is.
  */
 import { afterEach, describe, expect, it } from "vitest";
 import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from "node:fs";
@@ -67,15 +67,16 @@ function makeCtx(opts: {
 			visionBridgePrompt: "",
 			reviewPrompt: "",
 			reviewDisabledSkills: [],
+			additionalSkillPaths: [],
 			thinkingWrap: true,
 		},
-		// 非视觉路径下只用得到 session.model / modelRuntime 的占位（不触 SDK）。
+		// Non-vision path only needs session.model / modelRuntime placeholders (no SDK).
 		session: { model: null, modelRuntime: null } as unknown as AttachmentContext["session"],
 	};
 }
 
-describe("buildAttachmentMessages — 编辑重问附件恢复", () => {
-	it("新 fileData 上传的 aside 卡带 upload:true（供按路径恢复）", async () => {
+describe("buildAttachmentMessages — edit-and-reask attachment restore", () => {
+	it("new fileData upload aside card has upload:true (restore by path)", async () => {
 		const dataDir = tempDir();
 		const oldDataDir = process.env.PI_WEB_DATA_DIR;
 		process.env.PI_WEB_DATA_DIR = dataDir;
@@ -94,7 +95,7 @@ describe("buildAttachmentMessages — 编辑重问附件恢复", () => {
 			expect(out.length).toBe(1);
 			expect(out[0].message.customType).toBe("file");
 			expect(out[0].message.details.upload).toBe(true);
-			// 文本小文件 → inline，路径是 uploads 目录下的绝对路径
+			// Small text file → inline; path is absolute under the uploads dir
 			expect(out[0].message.details.mode).toBe("inline");
 			const abs = out[0].message.details.path!;
 			expect(abs.startsWith(uploadsRoot(dataDir).replace(/\\/g, "/"))).toBe(
@@ -107,13 +108,13 @@ describe("buildAttachmentMessages — 编辑重问附件恢复", () => {
 		}
 	});
 
-	it("恢复的 uploadPath 从 uploads 目录重读字节、按同路径附加", async () => {
+	it("restored uploadPath re-reads bytes from uploads dir and re-attaches at the same path", async () => {
 		const dataDir = tempDir();
 		const oldDataDir = process.env.PI_WEB_DATA_DIR;
 		process.env.PI_WEB_DATA_DIR = dataDir;
 		try {
 			const clientId = "edit-client";
-			// 先真正落一个上传文件，模拟“之前 prompt 上传过”
+			// Persist a real upload first, simulating "uploaded on a previous prompt"
 			const { abs, displayName } = saveUpload(
 				clientId,
 				"data.bin",
@@ -131,7 +132,7 @@ describe("buildAttachmentMessages — 编辑重问附件恢复", () => {
 				},
 			])) as Aside[];
 			expect(out.length).toBe(1);
-			// 二进制 → reference
+			// Binary → reference
 			expect(out[0].message.details.mode).toBe("reference");
 			expect(out[0].message.details.upload).toBe(true);
 			expect(out[0].message.details.name).toBe(displayName);
@@ -143,12 +144,12 @@ describe("buildAttachmentMessages — 编辑重问附件恢复", () => {
 		}
 	});
 
-	it("恢复的 uploadPath 越出本客户端 uploads 目录 → 拒绝 + notice", async () => {
+	it("restored uploadPath outside this client's uploads dir → reject + notice", async () => {
 		const dataDir = tempDir();
 		const oldDataDir = process.env.PI_WEB_DATA_DIR;
 		process.env.PI_WEB_DATA_DIR = dataDir;
 		try {
-			// 别的客户端目录里的文件
+			// File in another client's directory
 			const other = saveUpload("other-client", "x.txt", Buffer.from("x"), dataDir);
 			const notices: { level: string; text: string }[] = [];
 			const ctx = makeCtx({ dataDir, cwd: tempDir(), clientId: "edit-client", notices });
@@ -160,7 +161,7 @@ describe("buildAttachmentMessages — 编辑重问附件恢复", () => {
 				},
 			])) as Aside[];
 			expect(out.length).toBe(0);
-			expect(notices.some((n) => /路径不在本客户端上传目录/.test(n.text))).toBe(
+			expect(notices.some((n) => /not in this client's upload directory/.test(n.text))).toBe(
 				true,
 			);
 		} finally {
@@ -169,7 +170,7 @@ describe("buildAttachmentMessages — 编辑重问附件恢复", () => {
 		}
 	});
 
-	it("恢复的 uploadPath 文件已被清理 → notice + 跳过", async () => {
+	it("restored uploadPath file already cleaned up → notice + skip", async () => {
 		const dataDir = tempDir();
 		const oldDataDir = process.env.PI_WEB_DATA_DIR;
 		process.env.PI_WEB_DATA_DIR = dataDir;
@@ -186,14 +187,14 @@ describe("buildAttachmentMessages — 编辑重问附件恢复", () => {
 				},
 			])) as Aside[];
 			expect(out.length).toBe(0);
-			expect(notices.some((n) => /已被清理或不可读/.test(n.text))).toBe(true);
+			expect(notices.some((n) => /cleaned up or unreadable/.test(n.text))).toBe(true);
 		} finally {
 			if (oldDataDir === undefined) delete process.env.PI_WEB_DATA_DIR;
 			else process.env.PI_WEB_DATA_DIR = oldDataDir;
 		}
 	});
 
-	it("工作区路径附件（reference / inline / lines）原样重附加", async () => {
+	it("workspace-path attachments (reference / inline / lines) re-attached as-is", async () => {
 		const cwd = tempDir();
 		const src = join(cwd, "src");
 		mkdirSync(src, { recursive: true });

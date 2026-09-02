@@ -1,14 +1,14 @@
 /**
- * vscode-editor 插件协议冒烟测试（零 token、自包含）。
+ * vscode-editor plugin protocol smoke (zero token, self-contained).
  *
- * 把 dev/plugins/vscode-editor（manifest + index.mjs + client bundle）拷进
- * 临时 data-dir，起隔离端口 server，验证：
- * - plugins 清单含 vscode-editor 且 hasClient
- * - list / flatlist / read / write / create / rename / delete 全链路
- *   （reqId 匹配、GBK 解码、路径越界拒绝、忽略目录跳过、磁盘落盘核对）
- * - client/entry.mjs 静态服务 200 + JS Content-Type
+ * Copy dev/plugins/vscode-editor (manifest + index.mjs + client bundle) into a
+ * temp data-dir, start an isolated-port server, and verify:
+ * - plugins catalog includes vscode-editor with hasClient
+ * - list / flatlist / read / write / create / rename / delete full path
+ *   (reqId match, GBK decode, path-traversal refused, ignored dirs skipped, disk persist check)
+ * - client/entry.mjs static serving 200 + JS Content-Type
  *
- * 运行：先 npm run build:server，再 node tests/vscode-editor-plugin-test.mjs
+ * Run: npm run build:server, then node tests/vscode-editor-plugin-test.mjs
  */
 import { spawn } from "node:child_process";
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
@@ -30,23 +30,23 @@ function fail(msg) {
 	process.exitCode = 1;
 }
 
-// ---- 种插件目录 + 工作区夹具 ----------------------------------------------
+// ---- seed plugin dir + workspace fixture ----------------------------------------------
 const plugDst = join(dataDir, "plugins", "vscode-editor");
 mkdirSync(plugDst, { recursive: true });
 cpSync(join(repoRoot, "dev", "plugins", "vscode-editor", "manifest.json"), join(plugDst, "manifest.json"));
 cpSync(join(repoRoot, "dev", "plugins", "vscode-editor", "index.mjs"), join(plugDst, "index.mjs"));
 cpSync(join(repoRoot, "dev", "plugins", "vscode-editor", "client"), join(plugDst, "client"), { recursive: true });
 
-// 工作区：src/main.js + GBK 中文 txt + node_modules 噪音
+// workspace: src/main.js + GBK Chinese txt + node_modules noise
 mkdirSync(join(workspace, "src"), { recursive: true });
 mkdirSync(join(workspace, "node_modules", "noise-pkg"), { recursive: true });
 writeFileSync(join(workspace, "src", "main.js"), 'console.log("hello vsc");\n');
-writeFileSync(join(workspace, "README.md"), "# 测试仓库\n");
-// GBK 编码的「你好」
+writeFileSync(join(workspace, "README.md"), "# Test workspace\n");
+// GBK-encoded 「你好」
 writeFileSync(join(workspace, "gbk.txt"), Buffer.from([0xc4, 0xe3, 0xba, 0xc3]));
 writeFileSync(join(workspace, "node_modules", "noise-pkg", "index.js"), "// noise\n");
 
-/** 连接 WS 并等 ready。 */
+/** Connect WS and wait for ready. */
 function connect(clientId = "vsc-test") {
 	return new Promise((resolve, reject) => {
 		const sock = new WebSocket(`ws://127.0.0.1:${PORT}/ws`);
@@ -65,7 +65,7 @@ function connect(clientId = "vsc-test") {
 	});
 }
 
-/** 发 plugin_message 并等对应 reqId 的响应。 */
+/** Send plugin_message and wait for the matching-reqId response. */
 function rpc(sock, payload) {
 	return new Promise((resolve, reject) => {
 		const reqId = `t${Math.random().toString(36).slice(2)}`;
@@ -95,7 +95,7 @@ try {
 	});
 	proc.stderr.on("data", (d) => process.stderr.write(`[server] ${d}`));
 
-	// 等 HTTP 就绪
+	// wait until HTTP is ready
 	await new Promise((resolve, reject) => {
 		const t0 = Date.now();
 		const probe = async () => {
@@ -111,7 +111,7 @@ try {
 
 	let sock = await connect();
 
-	// -- 1. plugins 清单 ------------------------------------------------------
+	// -- 1. plugins catalog ------------------------------------------------------
 	const pluginsMsg = await new Promise((resolve, reject) => {
 		const timer = setTimeout(() => {
 			sock.off("message", onMsg);
@@ -130,59 +130,59 @@ try {
 	const me = (pluginsMsg.plugins ?? []).find((p) => p.id === "vscode-editor");
 	if (!me || me.hasClient !== true || me.error !== undefined) {
 		fail(`vscode-editor not listed correctly: ${JSON.stringify(me)}`);
-	} else console.log("✓ plugins 清单含 vscode-editor（hasClient）");
+	} else console.log("✓ plugins catalog includes vscode-editor (hasClient)");
 
-	// -- 2. list：根目录（目录优先排序、node_modules 被跳过） -------------------
+	// -- 2. list: root (dirs first, node_modules skipped) -------------------
 	let r = await rpc(sock, { action: "list", dir: "" });
 	if (!r.ok) fail(`list failed: ${r.error}`);
 	else if (readdirSync(workspace).some(() => false), true) {
 		const names = r.entries.map((e) => e.name);
-		if (names.includes("node_modules")) fail("list 应跳过 node_modules");
-		else if (r.entries[0]?.name !== "src" || r.entries[0]?.type !== "dir") fail(`目录应排在文件前: ${names}`);
-		else console.log("✓ list 根目录：目录优先 + 忽略 node_modules");
+		if (names.includes("node_modules")) fail("list should skip node_modules");
+		else if (r.entries[0]?.name !== "src" || r.entries[0]?.type !== "dir") fail(`dirs should sort before files: ${names}`);
+		else console.log("✓ list root: dirs first + node_modules ignored");
 	}
 
-	// -- 2b. list 子目录 ------------------------------------------------------
+	// -- 2b. list subdirectory ------------------------------------------------------
 	r = await rpc(sock, { action: "list", dir: "src" });
 	if (!r.ok || !r.entries.some((e) => e.name === "main.js")) fail(`list src failed: ${JSON.stringify(r)}`);
-	else console.log("✓ list 子目录 src/main.js");
+	else console.log("✓ list subdirectory src/main.js");
 
-	// -- 3. read：文本 + GBK 回退 ---------------------------------------------
+	// -- 3. read: text + GBK fallback ---------------------------------------------
 	r = await rpc(sock, { action: "read", path: "src/main.js" });
 	if (!r.ok || r.text !== 'console.log("hello vsc");\n') fail(`read main.js wrong: ${JSON.stringify(r)}`);
-	else console.log("✓ read 文本内容正确");
+	else console.log("✓ read text content is correct");
 
 	r = await rpc(sock, { action: "read", path: "gbk.txt" });
-	if (!r.ok || r.text !== "你好") fail(`GBK 解码失败: ${JSON.stringify(r)}`);
-	else console.log("✓ read GBK 回退解码为「你好」");
+	if (!r.ok || r.text !== "你好") fail(`GBK decode failed: ${JSON.stringify(r)}`);
+	else console.log("✓ read GBK fallback decoded as 「你好」");
 
-	// -- 4. 路径越界拒绝 -------------------------------------------------------
+	// -- 4. path traversal refused -------------------------------------------------------
 	r = await rpc(sock, { action: "read", path: "../outside.txt" });
-	if (r.ok) fail("../ 越界未被拒绝");
-	else console.log("✓ ../ 路径越界被拒绝");
+	if (r.ok) fail("../ traversal was not refused");
+	else console.log("✓ ../ path traversal was refused");
 
 	r = await rpc(sock, { action: "delete", path: "." });
-	if (r.ok) fail("删除根目录未被拒绝");
-	else console.log("✓ 拒绝删除根目录");
+	if (r.ok) fail("deleting the root was not refused");
+	else console.log("✓ refused deleting the root");
 
-	// -- 5. write → 磁盘核对 ----------------------------------------------------
+	// -- 5. write → disk check ----------------------------------------------------
 	r = await rpc(sock, { action: "write", path: "src/new.ts", text: "const x: number = 1;\n" });
 	if (!r.ok) fail(`write failed: ${r.error}`);
-	else if (readFileSync(join(workspace, "src", "new.ts"), "utf-8") !== "const x: number = 1;\n") fail("write 未落盘");
-	else console.log("✓ write 原子落盘（自动补父目录）");
+	else if (readFileSync(join(workspace, "src", "new.ts"), "utf-8") !== "const x: number = 1;\n") fail("write did not persist to disk");
+	else console.log("✓ write atomically persisted (parent dirs created)");
 
-	// -- 6. create file/dir + 重名报错 ------------------------------------------
+	// -- 6. create file/dir + duplicate-name error ------------------------------------------
 	r = await rpc(sock, { action: "create", path: "docs/guide.md", kind: "file" });
 	if (!r.ok) fail(`create file failed: ${r.error}`);
-	else if (!existsSync(join(workspace, "docs", "guide.md"))) fail("create file 未落盘");
-	else console.log("✓ create file（带子目录）");
+	else if (!existsSync(join(workspace, "docs", "guide.md"))) fail("create file did not persist");
+	else console.log("✓ create file (with subdirectory)");
 
 	r = await rpc(sock, { action: "create", path: "assets", kind: "dir" });
 	if (!r.ok) fail(`create dir failed: ${r.error}`);
 	r = await rpc(sock, { action: "create", path: "assets", kind: "dir" });
-	if (r.ok) fail("重复 create 应报错");
-	else if (!/已存在/.test(r.error)) fail(`重名错误文案异常: ${r.error}`);
-	else console.log("✓ create dir + 重名报错");
+	if (r.ok) fail("duplicate create should error");
+	else if (!/already exists/i.test(r.error)) fail(`duplicate-name error text unexpected: ${r.error}`);
+	else console.log("✓ create dir + duplicate-name error");
 
 	// -- 7. rename --------------------------------------------------------------
 	r = await rpc(sock, { action: "rename", path: "docs/guide.md", newName: "tutorial.md" });
@@ -190,38 +190,38 @@ try {
 	else console.log("✓ rename");
 
 	r = await rpc(sock, { action: "rename", path: "docs/tutorial.md", newName: "../evil.md" });
-	if (r.ok) fail("rename 含 .. 未拒绝");
-	else console.log("✓ rename 拒绝路径分隔符/..");
+	if (r.ok) fail("rename containing .. was not refused");
+	else console.log("✓ rename refused path separators/..");
 
-	// -- 8. flatlist（相对路径 + 跳过 node_modules） -----------------------------
+	// -- 8. flatlist (relative paths + skip node_modules) -----------------------------
 	r = await rpc(sock, { action: "flatlist" });
 	if (!r.ok) fail(`flatlist failed: ${r.error}`);
 	else {
 		const files = r.files ?? [];
-		if (files.some((f) => f.includes("node_modules"))) fail("flatlist 应跳过 node_modules");
-		else if (!files.includes("README.md") || !files.includes("src/main.js") || !files.includes("docs/tutorial.md")) fail(`flatlist 缺项: ${files}`);
-		else console.log(`✓ flatlist ${files.length} 个相对路径`);
+		if (files.some((f) => f.includes("node_modules"))) fail("flatlist should skip node_modules");
+		else if (!files.includes("README.md") || !files.includes("src/main.js") || !files.includes("docs/tutorial.md")) fail(`flatlist missing items: ${files}`);
+		else console.log(`✓ flatlist ${files.length} relative paths`);
 	}
 
 	// -- 9. delete ----------------------------------------------------------------
 	r = await rpc(sock, { action: "delete", path: "docs" });
 	if (!r.ok || existsSync(join(workspace, "docs"))) fail(`delete failed: ${JSON.stringify(r)}`);
-	else console.log("✓ delete 目录递归删除");
+	else console.log("✓ delete directory recursively");
 
-	// -- 10. 非法 action 报错不崩 --------------------------------------------------
+	// -- 10. illegal action errors without crashing --------------------------------------------------
 	r = await rpc(sock, { action: "no-such-action" });
-	if (r.ok) fail("未知 action 应失败");
-	else console.log("✓ 未知 action 返回错误且进程存活");
+	if (r.ok) fail("unknown action should fail");
+	else console.log("✓ unknown action returns an error and the process stays up");
 
-	// -- 11. 静态服务：client bundle -----------------------------------------------
+	// -- 11. static serving: client bundle -----------------------------------------------
 	const jsRes = await fetch(`${BASE}/plugins/vscode-editor/client/entry.mjs`);
 	const ct = jsRes.headers.get("content-type") ?? "";
-	if (!jsRes.ok || !/javascript|ecmascript/.test(ct)) fail(`entry.mjs 静态服务异常: ${jsRes.status} ${ct}`);
-	else if (!(await jsRes.text()).includes("vscode-editor 客户端 bundle")) fail("bundle 内容不符");
-	else console.log("✓ client/entry.mjs 静态服务 200 + JS Content-Type");
+	if (!jsRes.ok || !/javascript|ecmascript/.test(ct)) fail(`entry.mjs static serving unexpected: ${jsRes.status} ${ct}`);
+	else if (!(await jsRes.text()).includes("vscode-editor client bundle")) fail("bundle content mismatch");
+	else console.log("✓ client/entry.mjs static serving 200 + JS Content-Type");
 
-	// 非 client 子树路径不会命中插件静态路由，而是落 SPA catch-all 返回
-	// index.html —— 安全属性是“绝不返回插件目录里的源码”，而非状态码。
+	// paths outside the client subtree miss the plugin static route and fall through to the SPA catch-all
+	// index.html — the safety property is "never return plugin-dir source", not the status code.
 	for (const u of [
 		`${BASE}/plugins/vscode-editor/%2e%2e/index.mjs`,
 		`${BASE}/plugins/vscode-editor/manifest.json`,
@@ -229,10 +229,10 @@ try {
 		const res = await fetch(u);
 		const ct = res.headers.get("content-type") ?? "";
 		const body = await res.text();
-		if (/javascript|ecmascript/.test(ct) && /safeResolve|onMessage|路径越界/.test(body)) {
-			fail(`插件服务端源码经 ${u} 泄露`);
+		if (/javascript|ecmascript/.test(ct) && /safeResolve|onMessage|Path escapes/.test(body)) {
+			fail(`plugin server source leaked via ${u}`);
 		} else if (!/javascript|ecmascript/.test(ct)) {
-			console.log(`✓ ${u.replace(BASE, "")} 未暴露插件文件（${ct.split(";")[0]}）`);
+			console.log(`✓ ${u.replace(BASE, "")} did not expose plugin files (${ct.split(";")[0]})`);
 		}
 	}
 	sock.close();

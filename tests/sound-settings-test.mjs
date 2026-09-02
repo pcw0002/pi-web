@@ -4,7 +4,7 @@
  *   1. the dropdown opens with master + per-event toggles + volume
  *   2. toggling an event and changing volume persists to localStorage
  *   3. a reload restores the persisted settings
- *   4. "试听" plays a cue without throwing (no page errors)
+ *   4. "Preview" plays a cue without throwing (no page errors)
  *
  * No model calls needed — this is pure UI + persistence.
  * Run:  npm run build && node sound-settings-test.mjs */
@@ -65,7 +65,7 @@ async function waitServer() {
 }
 
 async function openSoundMenu(page) {
-	await page.locator(".topbar-actions .chip", { hasText: "声音" }).click();
+	await page.locator(".topbar-actions .chip", { hasText: "Sound" }).click();
 	await page.waitForSelector(".sound-menu", {
 		state: "visible",
 		timeout: 5000,
@@ -98,9 +98,9 @@ async function main() {
 	check("sound panel shows master + 4 event rows", rows === 5);
 	check(
 		"event rows labelled",
-		(await page.locator(".sound-menu").textContent())?.includes("问卷弹出") &&
-			(await page.locator(".sound-menu").textContent())?.includes("回复结束") &&
-			(await page.locator(".sound-menu").textContent())?.includes("出错"),
+		(await page.locator(".sound-menu").textContent())?.includes("Question popup") &&
+			(await page.locator(".sound-menu").textContent())?.includes("Reply finished") &&
+			(await page.locator(".sound-menu").textContent())?.includes("Error"),
 	);
 	check(
 		"volume slider present",
@@ -112,7 +112,7 @@ async function main() {
 	);
 
 	// -- master switch gates the rows ----------------------------------------
-	const startRow = page.locator(".sound-row", { hasText: "回复开始" });
+	const startRow = page.locator(".sound-row", { hasText: "Reply started" });
 	const startCheckbox = startRow.locator('input[type="checkbox"]');
 	check("start cue default off", (await startCheckbox.isChecked()) === false);
 	await page.locator(".sound-master input[type=checkbox]").uncheck();
@@ -142,7 +142,7 @@ async function main() {
 		(await page.locator(".sound-vol-num").textContent())?.includes("30"),
 	);
 
-	// -- 试听 must not throw --------------------------------------------------
+	// -- Preview must not throw --------------------------------------------------
 	await startRow.locator(".sound-preview").click();
 	await sleep(300);
 	check("preview plays without errors", consoleErrors.length === 0);
@@ -154,7 +154,7 @@ async function main() {
 	check(
 		"start cue persisted after reload",
 		await page
-			.locator(".sound-row", { hasText: "回复开始" })
+			.locator(".sound-row", { hasText: "Reply started" })
 			.locator('input[type="checkbox"]')
 			.isChecked(),
 	);

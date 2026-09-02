@@ -1,6 +1,6 @@
 // clone_provider — built-in → custom provider draft test (zero token).
 //
-// The model-config modal offers "复制为自定义": the server copies a BUILT-IN
+// The model-config modal offers "Copy as custom": the server copies a BUILT-IN
 // provider's baseUrl + current model catalog into an editable UiProviderConfig
 // draft (clone_provider_result) so the user can paste a SECOND API key without
 // overwriting the built-in one. Nothing is persisted until save_model_config.
@@ -192,7 +192,7 @@ try {
 		providerId: "deepseek-2",
 		config: {
 			providerId: "deepseek-2",
-			name: "DeepSeek 第二把钥匙",
+			name: "DeepSeek second key",
 			api: "openai-completions",
 			baseUrl: "https://api.deepseek.com",
 			apiKey: "second-key",
@@ -217,7 +217,7 @@ try {
 	// 5) unknown provider refuses.
 	c.send({ type: "clone_provider", provider: "no-such-provider", reqId: 14 });
 	const r4 = await c.waitFor("clone_provider_result", 10000, (m) => m.reqId === 14);
-	check("unknown provider → error", !r4.ok && (r4.error ?? "").includes("不存在"));
+	check("unknown provider → error", !r4.ok && (r4.error ?? "").includes("does not exist"));
 
 	console.log(`\n${passed} checks passed`);
 } catch (err) {

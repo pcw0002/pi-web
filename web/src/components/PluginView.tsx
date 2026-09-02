@@ -3,6 +3,7 @@ import {
 	makePluginContext,
 	type LoadedPluginView,
 } from "../plugin-loader";
+import { useT } from "../i18n";
 
 interface PluginViewProps {
 	entry: LoadedPluginView;
@@ -10,11 +11,13 @@ interface PluginViewProps {
 }
 
 /**
- * 插件视图宿主：一个薄 React 壳，把 DOM 容器 + 窄上下文交给插件的
- * mount()。切走时容器整体 display:none（不卸载，插件内部状态保留）；
- * 插件被移除/失败时才真正清理。
+ * Plugin view host: a thin React shell that hands a DOM container + narrow
+ * context to the plugin's mount(). Switching away sets display:none on the
+ * whole container (no unmount, plugin state is kept); real cleanup only
+ * happens when the plugin is removed or fails.
  */
 export function PluginView({ entry, send }: PluginViewProps) {
+	const t = useT();
 	const ref = useRef<HTMLDivElement>(null);
 	useEffect(() => {
 		const el = ref.current;
@@ -27,7 +30,7 @@ export function PluginView({ entry, send }: PluginViewProps) {
 			);
 		} catch (err) {
 			console.error(`[plugin:${entry.info.id}] mount failed:`, err);
-			el.textContent = `插件 ${entry.info.name} 挂载失败`;
+			el.textContent = t("pluginMountFailed", { name: entry.info.name });
 		}
 		return () => {
 			if (typeof cleanup === "function") {
@@ -39,6 +42,6 @@ export function PluginView({ entry, send }: PluginViewProps) {
 			}
 			el.textContent = "";
 		};
-	}, [entry, send]);
+	}, [entry, send, t]);
 	return <div className="plugin-view" ref={ref} />;
 }

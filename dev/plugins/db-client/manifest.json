@@ -1,8 +1,8 @@
 {
 	"id": "db-client",
-	"name": "数据库",
+	"name": "Database",
 	"version": "0.2.0",
-	"description": "数据库连接管理与浏览：MySQL / PostgreSQL / SQLite / SQL Server / MongoDB / Redis。库表树、表结构、数据分页查看、SQL 查询编辑器。依赖首次激活自动安装。",
+	"description": "Database connection manager and browser: MySQL / PostgreSQL / SQLite / SQL Server / MongoDB / Redis. Schema tree, table structure, paginated data, SQL query editor. Drivers auto-install on first activate.",
 	"permissions": [
 		"net",
 		"tools"

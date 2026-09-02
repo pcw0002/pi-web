@@ -1,14 +1,16 @@
 /**
- * PI_WEB_TOKEN 客户端配合逻辑。
+ * Client-side PI_WEB_TOKEN handling.
  *
- * 服务端设置 PI_WEB_TOKEN 后，所有 HTTP/WS 请求必须携带口令。浏览器导航
- * 无法带自定义头，所以约定：首次经 `?token=xxx` 进入 → 存入 localStorage →
- * 从地址栏移除（避免链接分享/历史记录泄露）→ 之后所有请求统一追加查询参数，
- * 服务端同时下发 HttpOnly cookie 兜底后续导航。
+ * Once the server sets PI_WEB_TOKEN, every HTTP/WS request must carry the
+ * secret. Browser navigation cannot send custom headers, so the contract is:
+ * first visit via `?token=xxx` → store in localStorage → strip it from the
+ * address bar (so shared links / history don't leak it) → every later request
+ * appends the query param. The server also sets an HttpOnly cookie as a
+ * fallback for subsequent navigations.
  */
 const KEY = "pi-web-ui:token";
 
-/** 应用启动时调用一次：吸收 URL 里的 ?token= 并清洗地址栏。 */
+/** Call once at app start: absorb ?token= from the URL and clean the address bar. */
 export function initAuthToken(): void {
 	try {
 		const url = new URL(window.location.href);
@@ -23,7 +25,7 @@ export function initAuthToken(): void {
 	}
 }
 
-/** 当前持久化的 token（未设置时为空串）。 */
+/** Currently persisted token (empty string when unset). */
 export function authToken(): string {
 	try {
 		return localStorage.getItem(KEY) ?? "";
@@ -32,7 +34,7 @@ export function authToken(): string {
 	}
 }
 
-/** 给相对路径 URL 追加 token 查询参数（已带 query 的用 & 连接）。 */
+/** Append the token query param to a relative URL (`&` if a query is already present). */
 export function withToken(url: string): string {
 	const t = authToken();
 	if (!t) return url;

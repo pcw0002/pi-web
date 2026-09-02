@@ -46,11 +46,11 @@ function matches(text: string, q: string): boolean {
 }
 
 /**
- * 全局搜索弹窗 —— 一个输入框同时搜三类目标：
- * ① 对话：历史会话列表（firstMessage + 文件名，客户端过滤，点击恢复）；
- * ② 项目：最近项目路径（客户端过滤，点击 set_cwd 切换工作区）；
- * ③ 文件：当前工作区递归文件名匹配（服务端 search_files，reqId 匹配，
- *    点击打开文件预览）。↑↓/Enter 键盘导航，Esc 关闭。
+ * Global search modal — one input searches three kinds of target:
+ * ① Conversations: history list (firstMessage + filename, client-side filter, click to restore);
+ * ② Projects: recent project paths (client-side filter, click set_cwd to switch workspace);
+ * ③ Files: recursive filename match in the current workspace (server search_files, matched by reqId,
+ *    click to open the file preview). ↑↓/Enter keyboard nav, Esc to close.
  */
 export function GlobalSearchModal({
 	send,

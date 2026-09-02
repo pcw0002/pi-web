@@ -37,10 +37,10 @@ describe("applyMessageDelta", () => {
 	it("appends text deltas onto an empty streaming message", () => {
 		const next = applyMessageDelta(
 			makeUi(),
-			delta({ assistantMessageEvent: { type: "text_delta", delta: "你好" } }),
+			delta({ assistantMessageEvent: { type: "text_delta", delta: "hello" } }),
 		);
 		expect(next.streamingMessage?.content).toEqual([
-			{ type: "text", text: "你好" },
+			{ type: "text", text: "hello" },
 		]);
 	});
 
@@ -70,12 +70,12 @@ describe("applyMessageDelta", () => {
 
 	it("creates a separate thinking block then a text block", () => {
 		let ui = makeUi();
-		ui = applyMessageDelta(ui, delta({ assistantMessageEvent: { type: "thinking_delta", delta: "想" } }));
-		ui = applyMessageDelta(ui, delta({ assistantMessageEvent: { type: "thinking_delta", delta: "考" } }));
-		ui = applyMessageDelta(ui, delta({ assistantMessageEvent: { type: "text_delta", delta: "答" } }));
+		ui = applyMessageDelta(ui, delta({ assistantMessageEvent: { type: "thinking_delta", delta: "thi" } }));
+		ui = applyMessageDelta(ui, delta({ assistantMessageEvent: { type: "thinking_delta", delta: "nk" } }));
+		ui = applyMessageDelta(ui, delta({ assistantMessageEvent: { type: "text_delta", delta: "ans" } }));
 		expect(ui.streamingMessage?.content).toEqual([
-			{ type: "thinking", thinking: "想考" },
-			{ type: "text", text: "答" },
+			{ type: "thinking", thinking: "think" },
+			{ type: "text", text: "ans" },
 		]);
 	});
 
@@ -94,13 +94,13 @@ describe("applyMessageDelta", () => {
 	it("patches onto the snapshot's streamingMessage with the same id and starts fresh on id change", () => {
 		const snap = makeUi({
 			id: "stream-100",
-			content: [{ type: "text", text: "快照" }],
+			content: [{ type: "text", text: "snap" }],
 		});
 		const next = applyMessageDelta(snap, delta({ assistantMessageEvent: { type: "text_delta", delta: "+" } }));
-		expect(next.streamingMessage?.content).toEqual([{ type: "text", text: "快照+" }]);
-		const other = applyMessageDelta(next, delta({ messageId: "stream-200", assistantMessageEvent: { type: "text_delta", delta: "新" } }));
+		expect(next.streamingMessage?.content).toEqual([{ type: "text", text: "snap+" }]);
+		const other = applyMessageDelta(next, delta({ messageId: "stream-200", assistantMessageEvent: { type: "text_delta", delta: "new" } }));
 		expect(other.streamingMessage?.id).toBe("stream-200");
-		expect(other.streamingMessage?.content).toEqual([{ type: "text", text: "新" }]);
+		expect(other.streamingMessage?.content).toEqual([{ type: "text", text: "new" }]);
 	});
 
 	it("merges usage into stats.tokens and keeps other token fields", () => {

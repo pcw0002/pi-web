@@ -1,13 +1,13 @@
 /**
- * image-paste-test.mjs — 纯 WebSocket 冒烟测试：验证「粘贴图片」协议路径。
+ * image-paste-test.mjs — pure WebSocket smoke: verify the "paste image" protocol path.
  *
- * 发送带 imageData（raw base64）附件的 prompt，验证：
- *   1. 服务端把它变成 image content 的 custom message（details.mode === "image"）
- *   2. 快照里该消息的 content 含 { type: "image", dataUrl: "data:image/..." }
- *   3. 超限图片（>2MB）被拒并回 notice
+ * Send a prompt with an imageData (raw base64) attachment and verify:
+ *   1. the server turns it into a custom message with image content (details.mode === "image")
+ *   2. that message's content in the snapshot has { type: "image", dataUrl: "data:image/..." }
+ *   3. oversized images (>2MB) are refused with a notice
  *
- * 用法（需先有 server 在跑）:
- *   node image-paste-test.mjs   # 连 ws://localhost:${PORT:-8787}
+ * Usage (needs a server already running):
+ *   node image-paste-test.mjs   # connect ws://localhost:${PORT:-8787}
  */
 import { randomUUID } from "node:crypto";
 import WebSocket from "ws";
@@ -18,7 +18,7 @@ const WS_URL = `ws://localhost:${PORT}/ws`;
 const clientId = randomUUID();
 const ws = new WebSocket(WS_URL);
 
-// 1x1 透明 PNG (base64)
+// 1x1 transparent PNG (base64)
 const TINY_PNG =
 	"iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
 
@@ -48,21 +48,21 @@ ws.on("message", (d) => {
 		ws.send(
 			JSON.stringify({
 				type: "prompt",
-				text: "描述这张图片",
+				text: "Describe this image",
 				attachments: [
 					{
 						path: "",
 						imageData: TINY_PNG,
 						mimeType: "image/png",
-						name: "粘贴测试.png",
+						name: "paste-test.png",
 						size: 0,
 					},
 					{
-						// 超限：1.5MB 的假 base64（>2MB 解码后）→ 应回 warning notice
+						// over limit: 1.5MB fake base64 (>2MB after decode) → should get a warning notice
 						path: "",
 						imageData: "A".repeat(3 * 1024 * 1024),
 						mimeType: "image/png",
-						name: "超大.png",
+						name: "too-large.png",
 						size: 0,
 					},
 				],
@@ -82,7 +82,7 @@ ws.on("message", (d) => {
 			log("OK: image custom message in snapshot:", JSON.stringify(msg.details));
 		}
 	} else if (m.type === "notice") {
-		if (m.level === "warning" && m.text.includes("超大.png")) {
+		if (m.level === "warning" && m.text.includes("too-large.png")) {
 			sawOversizeNotice = true;
 			log("OK: oversize notice:", m.text);
 		} else {

@@ -1,9 +1,9 @@
 /**
- * 左栏删除功能协议冒烟（零 token）：
- *   - delete_session：删除 <agentDir>/sessions/ 下的会话文件（磁盘验证 + sessions 列表刷新）
- *   - delete_session 越界路径（会话目录之外）：报错且不动文件
- *   - remove_project：把工作区从最近项目列表移出（projects 消息不再包含）
- * 自起编译后的 server（隔离端口 8967 + 临时 data-dir + 临时 agent-dir），自行清理。
+ * Left-panel delete protocol smoke (zero token):
+ *   - delete_session: deletes the session file under <agentDir>/sessions/ (disk check + sessions list refresh)
+ *   - delete_session out-of-bounds path (outside the sessions dir): error and file untouched
+ *   - remove_project: removes the workspace from recent projects (projects message no longer includes it)
+ * Self-starts a compiled server (isolated port 8967 + temp data-dir + temp agent-dir) and cleans up.
  */
 import { portUp } from "./lib/port-utils.mjs";
 import { fileURLToPath } from "node:url";
@@ -28,7 +28,7 @@ function check(name, ok, extra = "") {
 	if (!ok) failures++;
 }
 
-// 两个工作区：workDir 是 PI_WEB_CWD；otherDir 只作为最近项目条目存在
+// Two workspaces: workDir is PI_WEB_CWD; otherDir exists only as a recent-project entry
 const baseTmp = mkdtempSync(join(tmpdir(), "pi-web-lp-del-"));
 const workDir = join(baseTmp, "proj");
 const otherDir = join(baseTmp, "other");
@@ -39,7 +39,7 @@ writeFileSync(join(workDir, "a.txt"), "keep me");
 const dataDir = mkdtempSync(join(tmpdir(), "pi-web-lp-del-data-"));
 const agentDir = join(baseTmp, "agent");
 
-// 种两个会话文件（workDir 一条 + otherDir 一条），格式与 pi CLI/TUI 相同
+// Seed two session files (one for workDir + one for otherDir), same format as pi CLI/TUI
 function seedSession(dirName, id, cwd, text) {
 	const safePath = `--${cwd.replace(/^[/\\]/, "").replace(/[/\\:]/g, "-")}--`;
 	const dir = join(agentDir, "sessions", dirName ?? safePath);
@@ -70,9 +70,9 @@ function seedSession(dirName, id, cwd, text) {
 	);
 	return file;
 }
-const sess1 = seedSession(null, "del-target", workDir, "要删除的对话");
-const sess2 = seedSession(null, "del-keep", workDir, "要保留的对话");
-const sessOther = seedSession(null, "del-other", otherDir, "另一个项目的对话");
+const sess1 = seedSession(null, "del-target", workDir, "session to delete");
+const sess2 = seedSession(null, "del-keep", workDir, "session to keep");
+const sessOther = seedSession(null, "del-other", otherDir, "session in another project");
 
 let server = null;
 
@@ -156,58 +156,58 @@ async function run() {
 	await sleep(300);
 	const c = await connect();
 
-	// 1) list_sessions 发现种下的两条（当前项目 workDir）
+	// 1) list_sessions finds the two seeded sessions (current project workDir)
 	c.send({ type: "list_sessions" });
 	const s1 = await c.next((m) => m.type === "sessions", "sessions #1");
 	const paths1 = (s1.sessions ?? []).map((x) => x.path);
-	check("list_sessions 命中两条种子会话", paths1.includes(sess1) && paths1.includes(sess2), paths1.join(","));
+	check("list_sessions hits the two seeded sessions", paths1.includes(sess1) && paths1.includes(sess2), paths1.join(","));
 
-	// 2) delete_session 删除一条 → 磁盘消失 + 列表刷新只剩一条
-	// （attach 后有防抖的后台重复推送，必须等“确实不含被删项”的那一份）
+	// 2) delete_session deletes one → gone from disk + list refresh leaves one
+	// (attach has a debounced background re-push; wait for the copy that truly omits the deleted item)
 	c.send({ type: "delete_session", path: sess1 });
 	const s2 = await c.next(
 		(m) =>
 			m.type === "sessions" &&
 			!(m.sessions ?? []).some((x) => x.path === sess1),
-		"sessions #2（不含被删项）",
+		"sessions #2 (without the deleted item)",
 	);
 	const paths2 = (s2.sessions ?? []).map((x) => x.path);
-	check("删除后文件从磁盘消失", !existsSync(sess1), sess1);
-	check("删除后列表不再包含该会话", !paths2.includes(sess1), paths2.join(","));
-	check("另一条会话仍在", paths2.includes(sess2));
+	check("file is gone from disk after delete", !existsSync(sess1), sess1);
+	check("list no longer includes the session after delete", !paths2.includes(sess1), paths2.join(","));
+	check("the other session is still there", paths2.includes(sess2));
 
-	// 3) 越界路径拒绝：会话目录之外的文件不能删
+	// 3) out-of-bounds path refused: files outside the sessions dir cannot be deleted
 	c.send({ type: "delete_session", path: join(workDir, "a.txt") });
 	const n1 = await c.next(
 		(m) => m.type === "notice" && m.level === "error",
 		"error notice",
 	);
-	check("越界删除返回错误提示", typeof n1.text === "string" && n1.text.length > 0, n1.text);
-	check("越界文件未被删除", existsSync(join(workDir, "a.txt")));
+	check("out-of-bounds delete returns an error notice", typeof n1.text === "string" && n1.text.length > 0, n1.text);
+	check("out-of-bounds file was not deleted", existsSync(join(workDir, "a.txt")));
 
-	// 4) remove_project：最近项目列表移除 otherDir
+	// 4) remove_project: otherDir removed from recent projects
 	c.send({ type: "list_projects" });
 	const p1 = await c.next((m) => m.type === "projects", "projects #1");
 	const projPaths1 = (p1.projects ?? []).map((x) => x.path);
-	check("初始最近项目含 otherDir", projPaths1.includes(otherDir), projPaths1.join(","));
+	check("initial recent projects include otherDir", projPaths1.includes(otherDir), projPaths1.join(","));
 
 	c.send({ type: "remove_project", path: otherDir });
 	const p2 = await c.next(
 		(m) =>
 			m.type === "projects" &&
 			!(m.projects ?? []).some((x) => x.path === otherDir),
-		"projects #2（不含 otherDir）",
+		"projects #2 (without otherDir)",
 	);
 	const projPaths2 = (p2.projects ?? []).map((x) => x.path);
-	check("移除后最近项目不含 otherDir", !projPaths2.includes(otherDir), projPaths2.join(","));
-	check("移除只动 UI 状态，目录仍在磁盘", existsSync(otherDir));
+	check("recent projects omit otherDir after remove", !projPaths2.includes(otherDir), projPaths2.join(","));
+	check("remove only changes UI state; dir still on disk", existsSync(otherDir));
 
-	// 5) 移除是持久的：重连后再查一次
+	// 5) remove is persistent: check again after reconnect
 	const c2 = await connect();
 	c2.send({ type: "list_projects" });
 	const p3 = await c2.next((m) => m.type === "projects", "projects #3");
 	check(
-		"重连后 otherDir 仍不在最近项目里",
+		"after reconnect, otherDir is still not in recent projects",
 		!(p3.projects ?? []).some((x) => x.path === otherDir),
 	);
 

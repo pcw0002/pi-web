@@ -1,50 +1,50 @@
-# 📬 demo-mailbox —— 插件开发示例
+# 📬 demo-mailbox — plugin development sample
 
-pi-web-ui 可选界面组件的**最小可运行示例**：演示「服务端入口 index.mjs +
-客户端视图 client/entry.mjs + 双向消息」的完整链路。兼作
-`tests/plugin-test.mjs` 的协议测试夹具。
+A **minimal runnable sample** of a pi-web-ui optional UI component: demonstrates the
+full path of "server entry `index.mjs` + client view `client/entry.mjs` + two-way
+messages". Also used as the protocol fixture for `tests/plugin-test.mjs`.
 
-## 它做什么
+## What it does
 
-- 内存里预置两封示例邮件 + 一个回声表单
-- 客户端视图渲染邮件列表和发送表单；发送的消息经 WebSocket 到服务端，
-  服务端广播回所有打开的页面（多标签页实时同见）
-- 演示 `host.onMessage` / `host.broadcast` / `host.notify` 三个宿主 API 的用法
+- Two sample messages in memory plus an echo form
+- The client view renders the mail list and send form; sent messages go over
+  WebSocket to the server, which broadcasts them to every open page (multi-tab live)
+- Demonstrates `host.onMessage` / `host.broadcast` / `host.notify`
 
-## 目录结构
+## Layout
 
 ```
 demo-mailbox/
-├── manifest.json      # 插件清单（id/icon/name/version/description）
-├── index.mjs          # 服务端入口：export default { activate(host) → deactivate? }
-└── client/entry.mjs   # 视图入口：export default { mount(el, ctx) → cleanup? }
+├── manifest.json      # plugin manifest (id/icon/name/version/description)
+├── index.mjs          # server entry: export default { activate(host) → deactivate? }
+└── client/entry.mjs   # view entry: export default { mount(el, ctx) → cleanup? }
 ```
 
-## 本地试用
+## Try it locally
 
 ```bash
-# ── 安装 ──
+# ── Install ──
 pi-web-ui install https://github.com/xing-shuyin/pi-web-ui/tree/main/dev/plugins/demo-mailbox
-pi-web-ui install dev/plugins/demo-mailbox   # 或本地目录
+pi-web-ui install dev/plugins/demo-mailbox   # or a local directory
 
-# ── 查看 / 卸载 ──
-pi-web-ui plugins                            # 列出已装插件与 id
-pi-web-ui uninstall demo-mailbox             # 或 rm -rf ~/.pi-web/plugins/demo-mailbox
+# ── List / uninstall ──
+pi-web-ui plugins                            # list installed plugins and ids
+pi-web-ui uninstall demo-mailbox             # or rm -rf ~/.pi-web/plugins/demo-mailbox
 
-# ── 更新 ──
-pi-web-ui install ...同上... --force          # 覆盖重装
+# ── Update ──
+pi-web-ui install ...same as above... --force  # overwrite reinstall
 cp -r dev/plugins/demo-mailbox ~/.pi-web/plugins/
 ```
 
-刷新页面，顶栏出现 📬 标签即成功。删掉该目录再刷新即卸载——插件
-「不装即不存在」，无需任何注册步骤。
+Refresh the page; a 📬 tab in the top bar means it worked. Delete the directory and
+refresh to uninstall — plugins "do not exist until installed", no registration step.
 
-## 给插件开发者的提示
+## Notes for plugin authors
 
-- 服务端可以访问 Node 全部能力（真实插件如 webmail 在这里接 IMAP/SMTP）；
-  凭据只存 `<pluginDir>/`，不要写进代码库
-- 客户端与主应用只有两条窄通道：`ctx.send()` 上行、`ctx.onData()` 下行，
-  不共享 React 实例
-- 带请求语义的上行必须自带 `reqId`，响应靠它匹配并发；无 reqId 的响应会被
-  客户端静默丢弃
-- 协议约定详见 pi-web-ui 主 README「插件」章节与 AGENTS.md
+- The server can use all of Node (a real plugin such as webmail talks IMAP/SMTP here);
+  keep credentials in `<pluginDir>/`, not in the source tree
+- The client has only two narrow channels with the host app: `ctx.send()` up,
+  `ctx.onData()` down; they do not share a React instance
+- Request-shaped upstream messages must carry a `reqId` so responses can match
+  concurrent calls; responses without a reqId are silently dropped by the client
+- Protocol details: pi-web-ui main README "Plugins" section and AGENTS.md

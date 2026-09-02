@@ -1,14 +1,14 @@
 /**
- * db-client 插件客户端视图 —— 数据库连接管理/浏览界面。
+ * db-client plugin client view — database connection manager / browser.
  *
- * 布局：左侧连接列表（状态点 / 新建 / 编辑 / 测试 / 删除），右侧工作区：
- * - SQL 系（mysql/postgres/sqlite/sqlserver）：库下拉 → 表树（可筛选）→
- *   「数据」分页表格（点列头排序）｜「结构」列/索引/DDL｜「SQL」查询编辑器（Ctrl+Enter 运行）
- * - MongoDB：集合树 →「数据」文档列表（JSON 过滤条件）｜「结构」索引
- * - Redis：键模式扫描列表 → 值详情（TTL/大小/内容）+ 原始命令行
+ * Layout: connection list on the left (status dot / New / Edit / Test / Delete), workspace on the right:
+ * - SQL (mysql/postgres/sqlite/sqlserver): database dropdown → table tree (filterable) →
+ *   Data paginated grid (click column headers to sort) | Schema Columns/Indexes/DDL | SQL query editor (Ctrl+Enter)
+ * - MongoDB: collection tree → Data document list (JSON filter) | Schema Indexes
+ * - Redis: key-pattern scan list → value detail (TTL/size/content) + raw command line
  *
- * 协议见 index.mjs：{action, reqId} 上行请求；res 响应 reqId 匹配；
- * event:"conn_closed" 定向推送；kind:"state" 广播（凭据脱敏）。
+ * Protocol is in index.mjs: {action, reqId} uplink; responses match reqId;
+ * event:"conn_closed" is sent to the creator; kind:"state" is broadcast (credentials redacted).
  */
 
 function esc(s) {
@@ -26,7 +26,7 @@ export default {
 	<style>
 		.dbx { display: flex; height: 100%; min-height: 480px; font-size: 13px; color: var(--text, #e6e6ef); }
 		.dbx .hidden { display: none !important; }
-		/* ---- 左侧连接栏 ---- */
+		/* ---- Left connection rail ---- */
 		.dbx-side { width: 230px; min-width: 170px; flex-shrink: 0; display: flex; flex-direction: column;
 			border-right: 1px solid var(--border, #333); background: var(--bg-elev1, #16161d); overflow: hidden; }
 		.dbx-side-head { display: flex; align-items: center; padding: 9px 10px 6px; font-size: 11px;
@@ -51,7 +51,7 @@ export default {
 		.dbx-deps button { all: unset; display: block; width: 100%; box-sizing: border-box; padding: 8px 12px; cursor: pointer;
 			font-size: 12px; color: var(--amber, #fbbf24); }
 		.dbx-deps button:disabled { cursor: wait; opacity: .6; }
-		/* ---- 右侧主区 ---- */
+		/* ---- right main pane ---- */
 		.dbx-main { flex: 1; min-width: 0; display: flex; flex-direction: column; background: var(--bg-elev0, #101016); overflow: hidden; position: relative; }
 		.dbx-placeholder { flex: 1; display: grid; place-items: center; opacity: .45; text-align: center; line-height: 2.1; }
 		.dbx-work { display: flex; }
@@ -68,7 +68,7 @@ export default {
 		.dbx-tab.active { background: color-mix(in srgb, var(--accent, #7c5cff) 25%, transparent); opacity: 1; font-weight: 600; }
 		.dbx-grow { flex: 1; }
 		.dbx-body { flex: 1; min-height: 0; display: flex; }
-		/* ---- 表树 ---- */
+		/* ---- Table tree ---- */
 		.dbx-tree { width: 210px; min-width: 150px; flex-shrink: 0; display: flex; flex-direction: column;
 			border-right: 1px solid var(--border, #333); }
 		.dbx-tree input.filter { margin: 8px 8px 4px; box-sizing: border-box; background: var(--bg-elev2, #20202b); color: inherit;
@@ -81,7 +81,7 @@ export default {
 		.dbx-trow .cnt { font-size: 10.5px; opacity: .45; }
 		.dbx-trow .badge { font-size: 9.5px; padding: 0 4px; border-radius: 3px; background: var(--bg-elev3, #2a2a38); opacity: .75; }
 		.dbx-tree-empty { padding: 16px 12px; opacity: .45; text-align: center; line-height: 1.9; }
-		/* ---- 内容面板 ---- */
+		/* ---- Content pane ---- */
 		.dbx-content { flex: 1; min-width: 0; display: flex; flex-direction: column; }
 		.pane { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 		.data-bar { display: flex; align-items: center; gap: 6px; padding: 7px 10px; border-bottom: 1px solid var(--border, #333);
@@ -105,19 +105,19 @@ export default {
 		.grid-empty { padding: 26px; text-align: center; opacity: .45; }
 		.status-line { padding: 5px 10px; font-size: 11.5px; opacity: .55; border-top: 1px solid var(--border, #333); }
 		.err-text { color: var(--red, #f87171); }
-		/* ---- 结构页 ---- */
+		/* ---- Schema pane ---- */
 		.pane-schema { overflow: auto; padding: 10px 12px; gap: 14px; }
 		.pane-schema h4 { margin: 4px 0 6px; font-size: 12px; letter-spacing: .06em; text-transform: uppercase; opacity: .6; }
 		.pane-schema pre.ddl { margin: 0; padding: 10px 12px; background: var(--bg-elev2, #20202b); border: 1px solid var(--border, #333);
 			border-radius: 8px; font: 12px/1.6 ui-monospace, Consolas, monospace; overflow: auto; white-space: pre; }
-		/* ---- 查询页 ---- */
+		/* ---- Query pane ---- */
 		.query-bar { display: flex; align-items: center; gap: 10px; padding: 6px 10px; border-bottom: 1px solid var(--border, #333); }
 		.query-bar .hint { font-size: 11px; opacity: .5; }
 		textarea.sqlbox { height: 130px; flex-shrink: 0; resize: vertical; border: 0; outline: 0; background: transparent; color: inherit;
 			font: 13px/1.55 ui-monospace, Consolas, "Cascadia Mono", monospace; padding: 10px 12px; tab-size: 2;
 			border-bottom: 1px solid var(--border, #333); }
 		.q-result { flex: 1; min-height: 0; overflow: auto; }
-		/* ---- 结构表 ---- */
+		/* ---- Schema tables ---- */
 		table.mtable { width: 100%; border-collapse: collapse; font-size: 12.5px; }
 		.mtable th { text-align: left; padding: 5px 10px; font-size: 11px; text-transform: uppercase; letter-spacing: .05em;
 			opacity: .55; border-bottom: 1px solid var(--border, #444); }
@@ -144,7 +144,7 @@ export default {
 			font-size: 12px; }
 		.key-detail pre { flex: 1; margin: 0; overflow: auto; padding: 10px 12px;
 			font: 12.5px/1.6 ui-monospace, Consolas, monospace; white-space: pre-wrap; word-break: break-all; }
-		/* ---- 弹层 ---- */
+		/* ---- Modal ---- */
 		.dbx-modal-bg { position: absolute; inset: 0; z-index: 30; background: rgba(0,0,0,.45); display: grid; place-items: center; }
 		.dbx-modal { width: min(460px, 92%); max-height: 92%; overflow: auto; background: var(--bg-elev2, #20202b);
 			border: 1px solid var(--border, #444); border-radius: 12px; padding: 16px 18px; }
@@ -163,7 +163,7 @@ export default {
 		.dbx-toast { position: absolute; bottom: 10px; left: 50%; transform: translateX(-50%); z-index: 40;
 			background: var(--bg-elev3, #2a2a38); border: 1px solid var(--border, #444); border-radius: 8px;
 			padding: 6px 14px; font-size: 12.5px; max-width: 80%; transition: opacity .25s; }
-		/* ---- 行编辑 ---- */
+		/* ---- Row edit ---- */
 		.dgrid th.ops-th { width: 70px; }
 		.dgrid td.ops-cell { white-space: nowrap; }
 		.dgrid td.ops-cell button { all: unset; cursor: pointer; opacity: 0; padding: 1px 6px; border-radius: 4px; font-size: 12px; }
@@ -182,56 +182,56 @@ export default {
 			resize: none; font: 12.5px/1.6 ui-monospace, Consolas, monospace; white-space: pre; }
 	</style>
 	<div class="dbx-side">
-		<div class="dbx-side-head"><b>数据库连接</b><button data-act="add" title="新建连接">＋</button></div>
+		<div class="dbx-side-head"><b>Database connections</b><button data-act="add" title="New connection">＋</button></div>
 		<div class="dbx-deps"></div>
 		<div class="dbx-conns"></div>
 	</div>
 	<div class="dbx-main">
-		<div class="dbx-placeholder">👈 选择左侧连接打开数据库<br><small>库表浏览 · 数据分页 · 结构查看 · SQL 查询</small></div>
+		<div class="dbx-placeholder">👈 Select a connection on the left to open a database<br><small>schema browse · paginated data · structure · SQL</small></div>
 		<div class="dbx-work hidden" style="flex-direction:column;flex:1;min-height:0">
 			<div class="dbx-topbar">
 				<span class="lbl"></span>
-				<select class="db-sel" title="选择数据库"></select>
+				<select class="db-sel" title="Select database"></select>
 				<span class="dbx-tabs">
-					<button class="dbx-tab" data-tab="data">数据</button>
-					<button class="dbx-tab" data-tab="schema">结构</button>
+					<button class="dbx-tab" data-tab="data">Data</button>
+					<button class="dbx-tab" data-tab="schema">Schema</button>
 					<button class="dbx-tab" data-tab="query">SQL</button>
 				</span>
 				<span class="dbx-grow"></span>
-				<button class="act btn-refresh" title="刷新">⟳</button>
-				<button class="act btn-disconnect">断开</button>
+				<button class="act btn-refresh" title="Refresh">⟳</button>
+				<button class="act btn-disconnect">Disconnect</button>
 			</div>
 			<div class="dbx-body">
 				<div class="dbx-tree">
-					<input class="filter" placeholder="筛选名称…" spellcheck="false" />
+					<input class="filter" placeholder="Filter names…" spellcheck="false" />
 					<div class="dbx-tables"></div>
 				</div>
 				<div class="dbx-content">
 					<div class="pane pane-data">
 						<div class="data-bar">
 							<span class="tbl-lbl"></span>
-							<input class="docfilter hidden" placeholder='过滤条件 JSON，如 {"age":{"$gt":18}}' spellcheck="false" />
-							<button class="btn btn-filter hidden">应用过滤</button>
-							<button class="btn btn-insert hidden">＋ 新增</button>
+							<input class="docfilter hidden" placeholder='Filter JSON, e.g. {"age":{"$gt":18}}' spellcheck="false" />
+							<button class="btn btn-filter hidden">Apply filter</button>
+							<button class="btn btn-insert hidden">＋ Add</button>
 							<span class="dbx-grow"></span>
-							<button class="btn pg-first" title="首页">⏮</button>
-							<button class="btn pg-prev" title="上一页">◀</button>
+							<button class="btn pg-first" title="First">⏮</button>
+							<button class="btn pg-prev" title="Prev">◀</button>
 							<span class="pginfo"></span>
-							<button class="btn pg-next" title="下一页">▶</button>
-							<button class="btn pg-last" title="末页">⏭</button>
+							<button class="btn pg-next" title="Next">▶</button>
+							<button class="btn pg-last" title="Last">⏭</button>
 						</div>
 						<div class="grid-wrap"><div class="grid-host"></div></div>
 						<div class="status-line"></div>
 					</div>
 					<div class="pane pane-schema hidden">
-						<h4>列</h4><div class="cols-host"></div>
-						<h4>索引</h4><div class="idx-host"></div>
+						<h4>Columns</h4><div class="cols-host"></div>
+						<h4>Indexes</h4><div class="idx-host"></div>
 						<h4>DDL</h4><pre class="ddl"></pre>
 					</div>
 					<div class="pane pane-query hidden">
 						<div class="query-bar">
-							<button class="primary btn-run">▶ 运行 (Ctrl+Enter)</button>
-							<span class="hint">对当前选中的库执行；多条语句只返回第一个结果集</span>
+							<button class="primary btn-run">▶ Run (Ctrl+Enter)</button>
+							<span class="hint">Runs against the selected database; multiple statements return only the first result set</span>
 							<span class="dbx-grow"></span>
 							<span class="q-status"></span>
 						</div>
@@ -241,20 +241,20 @@ export default {
 					<div class="pane pane-redis hidden">
 						<div class="redis-bar">
 							<input class="pattern" value="*" spellcheck="false" />
-							<button class="btn btn-scan">扫描</button>
+							<button class="btn btn-scan">Scan</button>
 							<span class="redis-meta"></span>
 							<span class="dbx-grow"></span>
-							<input class="cmdline" placeholder="原始命令，如 GET foo / KEYS *" spellcheck="false" />
-							<button class="btn btn-cmd">执行</button>
+							<input class="cmdline" placeholder="Raw command, e.g. GET foo / KEYS *" spellcheck="false" />
+							<button class="btn btn-cmd">Run</button>
 						</div>
 						<div class="redis-split">
 							<div class="keys-list"></div>
 							<div class="key-detail">
 								<div class="kd-head"><span class="kd-name"></span><span class="kd-info"></span>
 									<span class="dbx-grow"></span>
-									<button class="btn btn-save-key hidden" title="写回该字符串键">保存键值</button>
-									<button class="btn btn-del-key">删除键</button></div>
-								<pre class="kd-value">// 点击左侧键查看详情；上方命令行可执行任意 Redis 命令</pre>
+									<button class="btn btn-save-key hidden" title="Write back this string key">Save value</button>
+									<button class="btn btn-del-key">Delete key</button></div>
+								<pre class="kd-value">// Click a key on the left for details; the command line above runs any Redis command</pre>
 								<textarea class="kd-text hidden" spellcheck="false"></textarea>
 							</div>
 						</div>
@@ -266,48 +266,48 @@ export default {
 			<div class="dbx-modal">
 				<h3 class="row-title"></h3>
 				<div class="row-body"></div>
-				<div class="hint row-hint">留空的列使用数据库默认值；输入 NULL（大写）表示写入 SQL NULL。</div>
+				<div class="hint row-hint">Blank columns use the database default; type NULL (uppercase) to write SQL NULL.</div>
 				<div class="btns"><span class="row-err err-text"></span>
-					<span class="right"><button class="r-cancel">取消</button><button class="primary r-save">保存</button></span></div>
+					<span class="right"><button class="r-cancel">Cancel</button><button class="primary r-save">Save</button></span></div>
 			</div>
 		</div>
 		<div class="dbx-modal-bg hidden">
 			<div class="dbx-modal">
-				<h3 class="m-title">新建连接</h3>
-				<label>名称（可选）</label><input name="name" placeholder="本地开发库" />
-				<label>类型 *</label>
+				<h3 class="m-title">New connection</h3>
+				<label>Name (optional)</label><input name="name" placeholder="local-dev" />
+				<label>Type *</label>
 				<select name="type">
 					<option value="mysql">MySQL / MariaDB</option>
 					<option value="postgres">PostgreSQL</option>
-					<option value="sqlite">SQLite（文件）</option>
+					<option value="sqlite">SQLite (file)</option>
 					<option value="sqlserver">SQL Server</option>
 					<option value="mongodb">MongoDB</option>
 					<option value="redis">Redis</option>
 				</select>
 				<div class="grp-net">
 					<div class="grid2">
-						<span><label>主机 *</label><input name="host" placeholder="127.0.0.1" /></span>
-						<span><label>端口</label><input name="port" placeholder="自动" /></span>
+						<span><label>host *</label><input name="host" placeholder="127.0.0.1" /></span>
+						<span><label>Port</label><input name="port" placeholder="auto" /></span>
 					</div>
 					<div class="grid2">
-						<span><label>用户名</label><input name="user" autocomplete="off" /></span>
-						<span><label>密码</label><input name="password" type="password" autocomplete="new-password" /></span>
+						<span><label>Username</label><input name="user" autocomplete="off" /></span>
+						<span><label>Password</label><input name="password" type="password" autocomplete="new-password" /></span>
 					</div>
-					<label>默认数据库（可选）</label><input name="database" autocomplete="off" />
+					<label>Default database (optional)</label><input name="database" autocomplete="off" />
 				</div>
 				<div class="grp-file">
-					<label>数据库文件路径 *</label><input name="file" placeholder="/path/to/data.db" spellcheck="false" />
+					<label>Database file path *</label><input name="file" placeholder="/path/to/data.db" spellcheck="false" />
 				</div>
 				<div class="grp-uri">
-					<label>连接 URI（可选，填了忽略上面主机/端口）</label><input name="uri" placeholder="mongodb://user:pass@host:27017" spellcheck="false" />
+					<label>Connection URI (optional; if set, host/port above are ignored)</label><input name="uri" placeholder="mongodb://user:pass@host:27017" spellcheck="false" />
 				</div>
 				<div class="grp-redis">
-					<label>逻辑库编号 db（0-15，可选）</label><input name="redisDb" placeholder="0" />
+					<label>Logical DB number db (0-15, optional)</label><input name="redisDb" placeholder="0" />
 				</div>
-				<div class="hint">配置只保存在本机插件目录（db-connections.json），不会上传。编辑时密码留空 = 保持不变。</div>
+				<div class="hint">Config stays in the plugin directory on this machine (db-connections.json) and is never uploaded. Leave password blank when editing to keep it.</div>
 				<div class="btns">
-					<button class="btn-test">测试连接</button>
-					<span class="right"><button class="m-cancel">取消</button><button class="primary m-save">保存</button></span>
+					<button class="btn-test">Test connection</button>
+					<span class="right"><button class="m-cancel">Cancel</button><button class="primary m-save">Save</button></span>
 				</div>
 			</div>
 		</div>
@@ -353,9 +353,9 @@ export default {
 		const kdText = $(".kd-text");
 		const pgInfo = $(".pginfo");
 
-		// ---- 全局状态 --------------------------------------------------------
+		// ---- Global state --------------------------------------------------------
 		let state = { depsOk: true, depsInstalling: false, conns: [], active: [], types: {} };
-		let work = null; // 当前工作区：{connId, label, kind, dialect, dbs[], curDb, tables[], curTable, page:{no,size,total}, orderBy, dir}
+		let work = null; // current workspace: {connId, label, kind, dialect, dbs[], curDb, tables[], curTable, page:{no,size,total}, orderBy, dir}
 		let activeTab = "data";
 		let modalEditId = null;
 
@@ -373,14 +373,14 @@ export default {
 			}, 3600);
 		}
 
-		// ---- 请求通道 --------------------------------------------------------
+		// ---- Request channel --------------------------------------------------------
 		const pending = new Map();
 		function request(payload) {
 			const reqId = `r${++reqSeq}`;
 			return new Promise((resolve) => {
 				pending.set(reqId, resolve);
 				ctx.send({ ...payload, reqId });
-				setTimeout(() => { if (pending.delete(reqId)) resolve({ ok: false, error: "请求超时" }); }, 45000);
+				setTimeout(() => { if (pending.delete(reqId)) resolve({ ok: false, error: "Request timed out" }); }, 45000);
 			});
 		}
 		const offData = ctx.onData((p) => {
@@ -390,8 +390,8 @@ export default {
 				pending.delete(p.reqId);
 				return;
 			}
-			// 状态同步兼容两种形态：广播 {kind:"state", state} 与
-			// state 请求的定向响应 {res:true, action:"state", state}
+			// State sync accepts two shapes: broadcast {kind:"state", state} and
+			// a directed response to a state request {res:true, action:"state", state}
 			if (p.kind === "state" || (p.res && p.action === "state" && p.state)) {
 				state = p.state;
 				renderConns();
@@ -400,17 +400,17 @@ export default {
 				return;
 			}
 			if (p.event === "conn_closed") {
-				toast(`连接断开：${p.reason || p.connId}`, true);
+				toast(`Disconnected:${p.reason || p.connId}`, true);
 				if (work && work.connId === p.connId) closeWork();
 			}
 		});
 
-		// ---- 连接列表 --------------------------------------------------------
+		// ---- Connection list --------------------------------------------------------
 		function renderDeps() {
 			depsEl.textContent = "";
 			if (state.depsOk) return;
 			const b = document.createElement("button");
-			b.textContent = state.depsInstalling ? "驱动安装中…" : "⚠ 驱动未安装，点击安装";
+			b.textContent = state.depsInstalling ? "Installing drivers…" : "⚠ Drivers not installed — click to install";
 			b.disabled = Boolean(state.depsInstalling);
 			b.addEventListener("click", () => void request({ action: "deps_install" }));
 			depsEl.appendChild(b);
@@ -419,7 +419,7 @@ export default {
 		function renderConns() {
 			connsEl.textContent = "";
 			if (!state.conns.length) {
-				connsEl.innerHTML = `<div class="dbx-empty">还没有连接<br>点右上角 ＋ 新建</div>`;
+				connsEl.innerHTML = `<div class="dbx-empty">No connections yet<br>click ＋ at the top right</div>`;
 				return;
 			}
 			for (const c of state.conns) {
@@ -429,13 +429,13 @@ export default {
 				row.innerHTML = `<span class="dot ${isActive ? "on" : ""}"></span>`
 					+ `<span class="info"><span class="nm">${esc(c.name)}</span>`
 					+ `<span class="addr">${esc(connAddr(c))}</span></span>`
-					+ `<span class="ops"><button data-op="edit" title="编辑">✎</button><button data-op="del" title="删除">🗑</button></span>`;
+					+ `<span class="ops"><button data-op="edit" title="Edit">✎</button><button data-op="del" title="Delete">🗑</button></span>`;
 				row.addEventListener("click", (ev) => {
 					const btn = ev.target.closest("button[data-op]");
 					if (!btn) return void openConn(c.id);
 					ev.stopPropagation();
 					if (btn.dataset.op === "edit") openModal(c);
-					else if (confirm(`删除连接「${c.name}」？`)) void request({ action: "conns_delete", id: c.id });
+					else if (confirm(`Delete connection "${c.name}"?`)) void request({ action: "conns_delete", id: c.id });
 				});
 				connsEl.appendChild(row);
 			}
@@ -450,9 +450,9 @@ export default {
 		}
 
 		async function openConn(hostId) {
-			// 驱动缺失由服务端报友好错误（按类型判断），不在这里整体拦截
+			// Missing drivers: the server reports a friendly error (by type); do not gate here
 			const r = await request({ action: "connect", id: hostId });
-			if (!r.ok) { toast(`连接失败：${r.error}`, true); return; }
+			if (!r.ok) { toast(`Connection failed:${r.error}`, true); return; }
 			setupWork(r.connId, r.label, r.kind, r.dialect);
 		}
 
@@ -463,7 +463,7 @@ export default {
 			renderConns();
 		}
 
-		// ---- 工作区 ----------------------------------------------------------
+		// ---- Workspace ----------------------------------------------------------
 		async function setupWork(connId, label, kind, dialect) {
 			work = {
 				connId, label, kind, dialect,
@@ -477,7 +477,7 @@ export default {
 			activeTab = "data";
 			workEl.classList.remove("hidden");
 			phEl.classList.add("hidden");
-			// 面板可见性按 kind 调整
+			// Pane visibility by kind
 			treeEl.classList.toggle("hidden", kind === "redis");
 			$(".pane-data").classList.toggle("hidden", kind === "redis");
 			schemaPane.classList.add("hidden");
@@ -500,7 +500,7 @@ export default {
 				work.dbs = r.databases;
 				work.curDb = pickDefaultDb(r.databases);
 			} catch (e) {
-				toast(`读取数据库列表失败：${e.message ?? e}`, true);
+				toast(`Failed to list databases: ${e.message ?? e}`, true);
 				work.dbs = []; work.curDb = null;
 			}
 			dbSel.innerHTML = work.dbs.map((d) => `<option${d === work.curDb ? " selected" : ""}>${esc(d)}</option>`).join("");
@@ -521,10 +521,10 @@ export default {
 		async function refreshTables() {
 			if (!work) return;
 			const r = await request({ action: "tables_list", connId: work.connId, db: work.curDb });
-			if (!r.ok) { toast(`读取表列表失败：${r.error}`, true); work.tables = []; }
+			if (!r.ok) { toast(`Failed to list tables: ${r.error}`, true); work.tables = []; }
 			else work.tables = r.tables;
 			renderTables();
-			// 自动选中第一张表
+			// Auto-select the first table
 			if (!work.curTable && work.tables.length && work.kind !== "redis") selectTable(work.tables[0].name, work.tables[0].kind);
 		}
 
@@ -532,7 +532,7 @@ export default {
 			const kw = filterInput.value.trim().toLowerCase();
 			tablesEl.textContent = "";
 			if (!work.tables.length) {
-				tablesEl.innerHTML = `<div class="dbx-tree-empty">${work.kind === "mongodb" ? "无集合" : "无表"}<br><small>点 ⟳ 刷新</small></div>`;
+				tablesEl.innerHTML = `<div class="dbx-tree-empty">${work.kind === "mongodb" ? "No collections" : "No tables"}<br><small>click ⟳ to refresh</small></div>`;
 				return;
 			}
 			for (const t of work.tables) {
@@ -596,10 +596,10 @@ export default {
 			else void loadData();
 		}
 
-		// ---- 数据页 ----------------------------------------------------------
+		// ---- Data pane ----------------------------------------------------------
 		async function loadData() {
 			if (!work || !work.curTable || work.kind === "redis") return;
-			statusLine.textContent = "加载中…";
+			statusLine.textContent = "Loading…";
 			gridHost.textContent = "";
 			const p = work.page;
 			const r = await request({
@@ -619,12 +619,12 @@ export default {
 			work.pkCol = r.grid.pkCol ?? null;
 			const canInsert = work.editable || (work.kind === "mongodb" && work.docs);
 			$(".btn-insert").classList.toggle("hidden", !canInsert);
-			$(".btn-insert").textContent = work.kind === "mongodb" ? "＋ 新文档" : "＋ 新增行";
+			$(".btn-insert").textContent = work.kind === "mongodb" ? "＋ New document" : "＋ New row";
 			renderGrid(gridHost, r.grid.columns, r.grid.rows, work.kind, r.grid);
 			const pages = Math.max(1, Math.ceil(p.total / p.size));
-			pgInfo.textContent = `第 ${p.no + 1}/${pages} 页`;
-			statusLine.textContent = `${work.curTable} · 共 ${fmtCount(p.total)} 行`
-				+ (r.grid.rows.length ? ` · 本页 ${r.grid.rows.length} 行` : "");
+			pgInfo.textContent = `Page ${p.no + 1}/${pages}`;
+			statusLine.textContent = `${work.curTable} · ${fmtCount(p.total)} rows`
+				+ (r.grid.rows.length ? ` · ${r.grid.rows.length} on this page` : "");
 			$(".pg-first").disabled = $(".pg-prev").disabled = p.no <= 0;
 			$(".pg-next").disabled = $(".pg-last").disabled = p.no >= pages - 1;
 		}
@@ -632,7 +632,7 @@ export default {
 		function renderGrid(host, columns, rows, kind, grid = {}) {
 			host.textContent = "";
 			if (!columns.length || !rows.length) {
-				host.innerHTML = `<div class="grid-empty">${columns.length ? "没有数据" : "无结果"}</div>`;
+				host.innerHTML = `<div class="grid-empty">${columns.length ? "No data" : "No results"}</div>`;
 				return;
 			}
 			const docs = Array.isArray(grid.docs) ? grid.docs : null;
@@ -670,8 +670,8 @@ export default {
 						: base;
 				}).join("")
 					+ (canDel ? '<td class="ops-cell">'
-						+ (kind === "mongodb" ? '<button data-op="docedit" title="编辑文档">✎</button>' : "")
-						+ '<button data-op="del" title="删除">🗑</button></td>' : "");
+						+ (kind === "mongodb" ? '<button data-op="docedit" title="Edit document">✎</button>' : "")
+						+ '<button data-op="del" title="Delete">🗑</button></td>' : "");
 				tb.appendChild(tr);
 			});
 			tbl.appendChild(tb);
@@ -693,7 +693,7 @@ export default {
 			host.appendChild(tbl);
 		}
 
-		/** 双击单元格 → 行内输入框；Enter 提交 / Esc 或失焦取消 */
+		/** Double-click a cell → inline input; Enter commits / Esc or blur cancels */
 		function startCellEdit(td, col, pkVal, orig) {
 			if (td.querySelector(".inline-edit")) return;
 			const input = document.createElement("input");
@@ -723,7 +723,7 @@ export default {
 				action: "row_update", connId: work.connId, db: work.curDb, table: work.curTable,
 				pk: { col: work.pkCol, val: pkVal }, changes: { [col]: val },
 			});
-			r.ok ? (toast("已保存"), void loadData()) : toast(`保存失败：${r.error}`, true);
+			r.ok ? (toast("Saved"), void loadData()) : toast(`Save failed:${r.error}`, true);
 		}
 
 		async function confirmDeleteRow(tr) {
@@ -731,35 +731,35 @@ export default {
 			let r;
 			if (work.kind === "mongodb") {
 				const idx = [...tr.parentNode.children].indexOf(tr);
-				if (!confirm("删除该文档？直接写库，不可撤销")) return;
+				if (!confirm("Delete this document? Writes the database immediately and cannot be undone")) return;
 				r = await request({ action: "doc_delete", connId: work.connId, db: work.curDb, table: work.curTable, id: work.docs?.[idx]?._id });
 			} else {
 				const pkCell = tr.querySelector("td[data-pk]");
-				if (!pkCell) { toast("该表没有主键，无法定位行", true); return; }
-				if (!confirm("删除这一行？直接写库，不可撤销")) return;
+				if (!pkCell) { toast("This table has no primary key, so the row cannot be located", true); return; }
+				if (!confirm("Delete this row? Writes the database immediately and cannot be undone")) return;
 				r = await request({ action: "row_delete", connId: work.connId, db: work.curDb, table: work.curTable, pk: { col: work.pkCol, val: pkCell.dataset.pk } });
 			}
-			r.ok ? void loadData() : toast(`删除失败：${r.error}`, true);
+			r.ok ? void loadData() : toast(`Delete failed:${r.error}`, true);
 		}
 
-		/** 新增行/新文档弹层（复用一个动态弹窗） */
+		/** New row / New document modal (one shared popup) */
 		async function openInsertModal() {
 			if (!work) return;
 			rowErr.textContent = "";
 			if (work.kind === "mongodb") { openDocModal("insert"); return; }
 			if (!work.schema) {
 				const r = await request({ action: "describe", connId: work.connId, db: work.curDb, table: work.curTable });
-				if (!r.ok) { toast(`读取结构失败：${r.error}`, true); return; }
+				if (!r.ok) { toast(`Failed to read schema: ${r.error}`, true); return; }
 				work.schema = r.describe;
 			}
-			rowTitle.textContent = `新增行 · ${work.curTable}`;
+			rowTitle.textContent = `New row · ${work.curTable}`;
 			rowHint.classList.remove("hidden");
-			// 自增主键/序列默认列不需要手填
+			// Auto-increment PK / sequence default columns need not be filled in
 			const cols = work.schema.columns.filter((c) =>
 				!(c.key === "PRI" && /int|serial/i.test(c.type)) && !(c.def && /nextval/i.test(c.def)));
 			rowBody.innerHTML = `<div class="flds">${cols.map((c) =>
-				`<label>${esc(c.name)}<small>${esc(c.type)}${c.nullable ? "" : " · 非空"}</small></label>`
-				+ `<input data-col="${esc(c.name)}" spellcheck="false" placeholder="${c.nullable ? "留空=默认值" : "必填"}" />`).join("")}</div>`;
+				`<label>${esc(c.name)}<small>${esc(c.type)}${c.nullable ? "" : " · not null"}</small></label>`
+				+ `<input data-col="${esc(c.name)}" spellcheck="false" placeholder="${c.nullable ? "blank = default" : "required"}" />`).join("")}</div>`;
 			rowModalBg.classList.remove("hidden");
 			rowBody.querySelector("input")?.focus();
 		}
@@ -769,7 +769,7 @@ export default {
 			rowErr.textContent = "";
 			rowHint.classList.add("hidden");
 			const doc = mode === "edit" ? work.docs?.[idx] ?? {} : {};
-			rowTitle.textContent = `${mode === "edit" ? "编辑文档" : "新文档"} · ${work.curTable}`;
+			rowTitle.textContent = `${mode === "edit" ? "Edit document" : "New document"} · ${work.curTable}`;
 			rowBody.innerHTML = `<textarea class="jsonbox" spellcheck="false">${esc(JSON.stringify(doc, null, 2))}</textarea>`;
 			rowModalBg.dataset.mode = mode;
 			rowModalBg.dataset.idx = String(idx ?? "");
@@ -796,16 +796,16 @@ export default {
 					}
 					r = await request({ action: "row_insert", connId: work.connId, db: work.curDb, table: work.curTable, values });
 				}
-				if (!r.ok) { rowErr.textContent = r.error ?? "保存失败"; return; }
+				if (!r.ok) { rowErr.textContent = r.error ?? "Save failed"; return; }
 				rowModalBg.classList.add("hidden");
-				toast("已保存");
+				toast("Saved");
 				void loadData();
 			} catch (e) {
 				rowErr.textContent = String(e?.message ?? e);
 			}
 		}
 
-		// 分页按钮
+		// Pagination buttons
 		$(".pg-first").addEventListener("click", () => { work.page.no = 0; void loadData(); });
 		$(".pg-prev").addEventListener("click", () => { if (work.page.no > 0) { work.page.no--; void loadData(); } });
 		$(".pg-next").addEventListener("click", () => { work.page.no++; void loadData(); });
@@ -823,10 +823,10 @@ export default {
 			if (ev.key === "Enter") { work.page.no = 0; void loadData(); }
 		});
 
-		// ---- 结构页 ----------------------------------------------------------
+		// ---- Schema pane ----------------------------------------------------------
 		async function loadSchema() {
-			if (!work || !work.curTable) { ddlPre.textContent = "// 先在左侧选择一张表"; return; }
-			colsHost.innerHTML = "<div class='grid-empty'>加载中…</div>";
+			if (!work || !work.curTable) { ddlPre.textContent = "// Select a table on the left first"; return; }
+			colsHost.innerHTML = "<div class='grid-empty'>Loading…</div>";
 			idxHost.textContent = "";
 			ddlPre.textContent = "";
 			const r = await request({ action: "describe", connId: work.connId, db: work.curDb, table: work.curTable });
@@ -836,38 +836,38 @@ export default {
 			if (d.columns.length) {
 				const t = document.createElement("table");
 				t.className = "mtable";
-				t.innerHTML = "<thead><tr><th>#</th><th>列名</th><th>类型</th><th>空</th><th>键</th><th>默认值</th><th>备注</th></tr></thead><tbody>"
+				t.innerHTML = "<thead><tr><th>#</th><th>Column</th><th>Type</th><th>Null</th><th>Key</th><th>Default</th><th>Comment</th></tr></thead><tbody>"
 					+ d.columns.map((c, i) => `<tr><td>${i + 1}</td><td>${esc(c.name)}</td><td>${esc(c.type)}</td>`
 						+ `<td>${c.nullable ? "YES" : "NO"}</td><td>${c.key ? `<span class="keytag">${esc(c.key)}</span>` : ""}</td>`
 						+ `<td>${esc(c.def ?? "")}</td><td>${esc(c.comment || "")}</td></tr>`).join("")
 					+ "</tbody>";
 				colsHost.appendChild(t);
-			} else colsHost.innerHTML = "<div class='grid-empty'>无固定列信息</div>";
+			} else colsHost.innerHTML = "<div class='grid-empty'>No fixed column info</div>";
 			idxHost.textContent = "";
 			if (d.indexes?.length) {
 				const t = document.createElement("table");
 				t.className = "mtable";
-				t.innerHTML = "<thead><tr><th>索引名</th><th>唯一</th><th>列 / 定义</th></tr></thead><tbody>"
+				t.innerHTML = "<thead><tr><th>Index</th><th>Unique</th><th>Columns / definition</th></tr></thead><tbody>"
 					+ d.indexes.map((i) => `<tr><td>${esc(i.name)}</td><td>${i.unique ? "✓" : ""}</td><td>${esc(i.columns)}</td></tr>`).join("")
 					+ "</tbody>";
 				idxHost.appendChild(t);
-			} else idxHost.innerHTML = "<div class='grid-empty'>无索引</div>";
-			ddlPre.textContent = d.ddl || "-- 无 DDL 信息";
+			} else idxHost.innerHTML = "<div class='grid-empty'>No indexes</div>";
+			ddlPre.textContent = d.ddl || "-- No DDL";
 		}
 
-		// ---- SQL 查询页 -------------------------------------------------------
+		// ---- SQL query pane -------------------------------------------------------
 		async function runQuery() {
 			if (!work) return;
 			const sql = sqlBox.value.trim();
-			if (!sql) { toast("SQL 为空", true); return; }
-			qStatus.textContent = "执行中…";
+			if (!sql) { toast("SQL is empty", true); return; }
+			qStatus.textContent = "Running…";
 			qStatus.classList.remove("err-text");
 			qGridHost.textContent = "";
 			const r = await request({ action: "query_exec", connId: work.connId, db: work.curDb, sql });
 			if (!r.ok) { qStatus.textContent = `✗ ${r.error}`; qStatus.classList.add("err-text"); return; }
 			qStatus.textContent = `✓ ${r.grid.elapsedMs}ms`
-				+ (r.grid.total ? ` · ${r.grid.total} 行` : "")
-				+ (r.grid.affected ? ` · 影响 ${r.grid.affected} 行` : "");
+				+ (r.grid.total ? ` · ${r.grid.total} rows` : "")
+				+ (r.grid.affected ? ` · ${r.grid.affected} affected` : "");
 			renderGrid(qGridHost, r.grid.columns, r.grid.rows, work.kind);
 		}
 		$(".btn-run").addEventListener("click", () => void runQuery());
@@ -882,16 +882,16 @@ export default {
 		// ---- Redis -----------------------------------------------------------
 		let curKey = null;
 		async function redisScan(pattern) {
-			keysList.innerHTML = "<div class='grid-empty'>扫描中…</div>";
+			keysList.innerHTML = "<div class='grid-empty'>Scanning…</div>";
 			const r = await request({ action: "redis_scan", connId: work.connId, pattern: pattern || "*", count: 300 });
 			if (!r.ok) { keysList.innerHTML = `<div class="err-text">${esc(r.error)}</div>`; return; }
 			curKey = null;
 			setKeyEditor(false);
 			kdName.textContent = "";
 			kdInfo.textContent = "";
-			kdValue.textContent = "// 点击左侧键查看详情";
+			kdValue.textContent = "// Click a key on the left for details";
 			keysList.textContent = "";
-			if (!r.keys.length) { keysList.innerHTML = "<div class='grid-empty'>没有匹配的键</div>"; return; }
+			if (!r.keys.length) { keysList.innerHTML = "<div class='grid-empty'>No matching keys</div>"; return; }
 			for (const k of r.keys) {
 				const row = document.createElement("div");
 				row.className = "krow";
@@ -903,7 +903,7 @@ export default {
 			if (r.cursor !== "0") {
 				const more = document.createElement("div");
 				more.className = "krow";
-				more.innerHTML = "<span class='kn' style='opacity:.5'>…还有更多（缩小 pattern 再扫）</span>";
+				more.innerHTML = "<span class='kn' style='opacity:.5'>…more (narrow the pattern and scan again)</span>";
 				keysList.appendChild(more);
 			}
 		}
@@ -912,21 +912,21 @@ export default {
 			curKey = key;
 			keysList.querySelectorAll(".krow").forEach((r) => r.classList.toggle("active", r.dataset.key === key));
 			kdName.textContent = key;
-			kdInfo.textContent = "加载中…";
+			kdInfo.textContent = "Loading…";
 			const r = await request({ action: "redis_key", connId: work.connId, key });
 			if (!r.ok) { setKeyEditor(null); kdValue.textContent = `✗ ${r.error}`; kdInfo.textContent = ""; return; }
 			const d = r.detail;
-			kdInfo.textContent = `类型 ${d.type} · 大小 ${fmtCount(d.size)} · TTL ${d.ttl < 0 ? "∞" : `${d.ttl}s`}`;
+			kdInfo.textContent = `Type ${d.type} · size ${fmtCount(d.size)} · TTL ${d.ttl < 0 ? "∞" : `${d.ttl}s`}`;
 			const editable = d.type === "string" && !d.truncated;
 			setKeyEditor(editable);
 			if (editable) kdText.value = d.value;
 			else {
 				kdValue.textContent = d.value;
-				if (d.truncated) kdValue.textContent += "\n\n（内容过长已截断，请用上方原始命令查看/修改）";
+				if (d.truncated) kdValue.textContent += "\n\n(Content truncated; use the raw command above to view/edit)";
 			}
 		}
 
-		/** 字符串键 → 可编辑 textarea；其余类型保持只读 pre */
+		/** String keys → editable textarea; other types stay a read-only <pre> */
 		function setKeyEditor(editable) {
 			kdValue.classList.toggle("hidden", Boolean(editable));
 			kdText.classList.toggle("hidden", !editable);
@@ -937,7 +937,7 @@ export default {
 		async function saveKeyValue() {
 			if (!curKey || !work) return;
 			const r = await request({ action: "redis_key_set", connId: work.connId, key: curKey, value: kdText.value });
-			r.ok ? toast("键值已保存") : toast(r.error, true);
+			r.ok ? toast("Key value saved") : toast(r.error, true);
 		}
 
 		async function refreshRedisMeta() {
@@ -948,24 +948,24 @@ export default {
 		$(".btn-scan").addEventListener("click", () => void redisScan($(".pattern").value.trim()));
 		$(".pattern").addEventListener("keydown", (ev) => { if (ev.key === "Enter") void redisScan($(".pattern").value.trim()); });
 		$(".btn-del-key").addEventListener("click", async () => {
-			if (!curKey || !confirm(`删除键「${curKey}」？`)) return;
+			if (!curKey || !confirm(`Delete key "${curKey}"?`)) return;
 			const r = await request({ action: "redis_del", connId: work.connId, key: curKey });
-			r.ok ? (toast("已删除"), void redisScan($(".pattern").value.trim())) : toast(r.error, true);
+			r.ok ? (toast("Deleted"), void redisScan($(".pattern").value.trim())) : toast(r.error, true);
 		});
 		async function runCmd() {
 			const line = $(".cmdline").value.trim();
 			if (!line) return;
 			kdName.textContent = `$ ${line}`;
-			kdInfo.textContent = "执行中…";
+			kdInfo.textContent = "Running…";
 			const r = await request({ action: "redis_cmd", connId: work.connId, cmd: line });
-			kdInfo.textContent = r.ok ? "完成" : "";
+			kdInfo.textContent = r.ok ? "Done" : "";
 			kdValue.textContent = r.ok ? String(r.output) : `✗ ${r.error}`;
 			void refreshRedisMeta();
 		}
 		$(".btn-cmd").addEventListener("click", () => void runCmd());
 		$(".cmdline").addEventListener("keydown", (ev) => { if (ev.key === "Enter") void runCmd(); });
 
-		// ---- 顶栏动作 ---------------------------------------------------------
+		// ---- Toolbar actions ---------------------------------------------------------
 		dbSel.addEventListener("change", () => void selectDb(dbSel.value));
 		filterInput.addEventListener("input", () => renderTables());
 		tabsEl.addEventListener("click", (ev) => {
@@ -986,7 +986,7 @@ export default {
 		});
 		$('[data-act="add"]').addEventListener("click", () => openModal(null));
 
-		// ---- 连接表单弹层 ------------------------------------------------------
+		// ---- Connection form modal ------------------------------------------------------
 		const TYPE_PORT = { mysql: 3306, postgres: 5432, sqlite: 0, sqlserver: 1433, mongodb: 27017, redis: 6379 };
 		const qf = (n) => modalBg.querySelector(`[name="${n}"]`);
 
@@ -1004,21 +1004,21 @@ export default {
 
 		function openModal(conn) {
 			modalEditId = conn?.id ?? null;
-			$(".m-title").textContent = conn ? "编辑连接" : "新建连接";
+			$(".m-title").textContent = conn ? "Edit connection" : "New connection";
 			qf("name").value = conn?.name ?? "";
 			const type = conn?.type ?? "mysql";
 			qf("type").value = type;
-			qf("type").disabled = Boolean(conn); // 类型不允许改
+			qf("type").disabled = Boolean(conn); // type cannot be changed
 			qf("host").value = conn?.host ?? "127.0.0.1";
 			qf("port").value = conn?.port ?? "";
 			qf("port").placeholder = TYPE_PORT[type] ? String(TYPE_PORT[type]) : "—";
 			qf("user").value = conn?.user ?? "";
 			qf("password").value = "";
-			qf("password").placeholder = conn?.hasPass ? "已保存（留空保持不变）" : "";
+			qf("password").placeholder = conn?.hasPass ? "Saved (leave blank to keep)" : "";
 			qf("database").value = conn?.database ?? "";
 			qf("file").value = conn?.file ?? "";
 			qf("uri").value = "";
-			qf("uri").placeholder = conn?.hasUri ? "已保存（留空保持不变）" : "mongodb://user:pass@host:27017";
+			qf("uri").placeholder = conn?.hasUri ? "Saved (leave blank to keep)" : "mongodb://user:pass@host:27017";
 			qf("redisDb").value = conn?.redisDb || "0";
 			syncFormGroups(type);
 			modalBg.classList.remove("hidden");
@@ -1047,28 +1047,28 @@ export default {
 		modalBg.addEventListener("click", (ev) => { if (ev.target === modalBg) modalBg.classList.add("hidden"); });
 		modalBg.querySelector(".btn-test").addEventListener("click", async () => {
 			const body = collectForm(true);
-			if (modalEditId && !body.password) delete body.password; // 服务端沿用旧值
+			if (modalEditId && !body.password) delete body.password; // server keeps the old value
 			const btn = modalBg.querySelector(".btn-test");
-			btn.textContent = "测试中…";
+			btn.textContent = "Testing…";
 			const r = await request({ action: "test", conn: body });
-			btn.textContent = "测试连接";
-			toast(r.ok ? "✓ 连接成功" : `✗ 连接失败：${r.error}`, !r.ok);
+			btn.textContent = "Test connection";
+			toast(r.ok ? "✓ Connected" : `✗ Connection failed:${r.error}`, !r.ok);
 		});
 		modalBg.querySelector(".m-save").addEventListener("click", async () => {
 			const body = collectForm(true);
 			const r = await request({ action: "conns_save", conn: body });
-			if (!r.ok) { toast(`保存失败：${r.error}`, true); return; }
+			if (!r.ok) { toast(`Save failed:${r.error}`, true); return; }
 			modalBg.classList.add("hidden");
 		});
 
-		// ---- 视图同步（多标签页共享 state 时保持高亮一致） ---------------------
+		// ---- View sync (keep highlight consistent when tabs share state) ---------------------
 		function syncActiveView() {
 			if (work && !state.active.some((a) => a.connId === work.connId)) closeWork();
 		}
 
-		// ---- 启动 ------------------------------------------------------------
-		// 走 request() 带 reqId，避免响应被 onData 的 res 分支吞掉；
-		// onData 也已兼容无 reqId 响应（双保险）
+		// ---- Startup ------------------------------------------------------------
+		// Use request() with a reqId so the response is not swallowed by onData's res branch;
+		// onData also accepts responses without reqId (belt and suspenders)
 		void request({ action: "state" }).then((r) => {
 			if (r.ok && r.state) {
 				state = r.state;

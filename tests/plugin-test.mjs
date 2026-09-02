@@ -1,14 +1,14 @@
 /**
- * 插件机制协议冒烟测试（零 token、自包含）。
+ * Plugin-mechanism protocol smoke test (zero token, self-contained).
  *
- * 覆盖：
- * - attach 后推送 plugins 目录清单（manifest 解析 + hasClient 探测）
- * - plugin_message → 服务端入口 onMessage → broadcast → plugin_data 回环
- * - /plugins/<id>/client/* 静态服务（Content-Type、路径穿越拒绝）
- * - 未激活插件的 plugin_message 静默丢弃（不崩、无回声）
- * - 坏 manifest / 非 id 目录被扫描跳过
+ * Covers:
+ * - after attach, push the plugins catalog (manifest parse + hasClient probe)
+ * - plugin_message → server entry onMessage → broadcast → plugin_data round-trip
+ * - /plugins/<id>/client/* static serving (Content-Type, path-traversal refused)
+ * - plugin_message to an inactive plugin is silently dropped (no crash, no echo)
+ * - bad manifest / non-id dirs are skipped by scan
  *
- * 运行：先 npm run build:server，再 node tests/plugin-test.mjs
+ * Run: npm run build:server, then node tests/plugin-test.mjs
  */
 import { spawn } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync, realpathSync } from "node:fs";
@@ -24,13 +24,13 @@ let proc = null;
 let ws = null;
 const dataDir = mkdtempSync(join(tmpdir(), "pi-web-plugin-test-"));
 
-// ---- 种插件目录 ------------------------------------------------------------
-// 1) 正常插件：服务端入口 + 客户端 bundle
+// ---- seed plugin dirs ------------------------------------------------------------
+// 1) normal plugin: server entry + client bundle
 const plugDir = join(dataDir, "plugins", "demo-mailbox");
 mkdirSync(plugDir, { recursive: true });
 writeFileSync(
 	join(plugDir, "manifest.json"),
-	JSON.stringify({ name: "邮箱", version: "0.1.0", description: "demo" }),
+	JSON.stringify({ name: "Mailbox", version: "0.1.0", description: "demo" }),
 );
 writeFileSync(
 	join(plugDir, "index.mjs"),
@@ -38,7 +38,7 @@ writeFileSync(
 		activate(host) {
 			return host.onMessage((payload) => {
 				if (payload && payload.action === "ping") host.broadcast({ pong: payload.value });
-				else if (payload && payload.action === "notify") host.notify("info", String(payload.text ?? "插件通知测试"));
+				else if (payload && payload.action === "notify") host.notify("info", String(payload.text ?? "plugin notify test"));
 				else if (payload && payload.action === "echo-to") host.sendTo(String(payload.clientId), { direct: payload.direct });
 			});
 		},
@@ -50,13 +50,13 @@ writeFileSync(
 	`export default { mount(el) { el.textContent = "ok"; } };`,
 );
 
-// 2) 纯前端插件（无 index.mjs，只有视图 bundle）
+// 2) front-end-only plugin (no index.mjs, view bundle only)
 const feDir = join(dataDir, "plugins", "frontend-only");
 mkdirSync(join(feDir, "client"), { recursive: true });
-writeFileSync(join(feDir, "manifest.json"), JSON.stringify({ name: "纯前端" }));
+writeFileSync(join(feDir, "manifest.json"), JSON.stringify({ name: "frontend-only" }));
 writeFileSync(join(feDir, "client", "entry.mjs"), `export default {};`);
 
-// 3) 坏 manifest（应被扫描跳过）
+// 3) bad manifest (should be skipped by scan)
 mkdirSync(join(dataDir, "plugins", "bad-json"), { recursive: true });
 writeFileSync(join(dataDir, "plugins", "bad-json", "manifest.json"), "{oops");
 
@@ -65,7 +65,7 @@ function fail(msg) {
 	process.exitCode = 1;
 }
 
-/** 连接 WS 并等第一条 plugins 消息。 */
+/** Connect WS and wait for the first plugins message. */
 function connect(clientId = "plugin-test") {
 	return new Promise((resolve, reject) => {
 		const sock = new WebSocket(`ws://127.0.0.1:${PORT}/ws`);
@@ -87,7 +87,7 @@ function connect(clientId = "plugin-test") {
 	});
 }
 
-/** 等到匹配谓词的 server 消息（带超时）。 */
+/** Wait for a server message matching the predicate (with timeout). */
 function waitFor(sock, pred, label, timeoutMs = 8000) {
 	return new Promise((resolve, reject) => {
 		const timer = setTimeout(
@@ -107,7 +107,7 @@ function waitFor(sock, pred, label, timeoutMs = 8000) {
 }
 
 try {
-	// 端口占用检查
+	// port-in-use check
 	const { execFileSync } = await import("node:child_process");
 	try {
 		execFileSync("lsof", ["-ti", `:${PORT}`, "-sTCP:LISTEN"], { stdio: "pipe" });
@@ -128,7 +128,7 @@ try {
 	});
 	proc.stderr.on("data", (d) => process.stderr.write(`[server] ${d}`));
 
-	// 等 HTTP 就绪
+	// wait until HTTP is ready
 	await new Promise((resolve, reject) => {
 		const t0 = Date.now();
 		const probe = async () => {
@@ -142,12 +142,12 @@ try {
 		void probe();
 	});
 
-	// -- 1. attach → plugins 清单 ------------------------------------------
+	// -- 1. attach → plugins catalog ------------------------------------------
 	let sock = await connect();
 	const pluginsMsg = await waitFor(sock, (m) => m.type === "plugins", "plugins");
 	const list = pluginsMsg.plugins ?? [];
 	const demo = list.find((p) => p.id === "demo-mailbox");
-	if (!demo || demo.name !== "邮箱" || demo.version !== "0.1.0") {
+	if (!demo || demo.name !== "Mailbox" || demo.version !== "0.1.0") {
 		fail(`demo-mailbox not listed correctly: ${JSON.stringify(demo)}`);
 	} else if (demo.hasClient !== true || demo.error !== undefined) {
 		fail(`demo-mailbox flags wrong: hasClient=${demo.hasClient} error=${demo.error}`);
@@ -162,20 +162,20 @@ try {
 	if (list.some((p) => p.id === "bad-json")) fail("bad-json dir should be skipped");
 	else console.log("✓ bad manifest skipped");
 
-	// -- 2. plugin_message 回环 --------------------------------------------
+	// -- 2. plugin_message round-trip --------------------------------------------
 	const echoP = waitFor(sock, (m) => m.type === "plugin_data" && m.pluginId === "demo-mailbox", "plugin_data");
 	sock.send(JSON.stringify({ type: "plugin_message", pluginId: "demo-mailbox", payload: { action: "ping", value: 42 } }));
 	const echo = await echoP;
 	if (echo.payload?.pong !== 42) fail(`echo wrong: ${JSON.stringify(echo.payload)}`);
 	else console.log("✓ plugin_message round-trips to plugin_data");
 
-	// -- 2b. host.notify → 系统通知条 ----------------------------------------
-	const noticeP = waitFor(sock, (m) => m.type === "notice" && m.text?.includes("插件通知测试"), "notice");
-	sock.send(JSON.stringify({ type: "plugin_message", pluginId: "demo-mailbox", payload: { action: "notify", text: "插件通知测试 OK" } }));
+	// -- 2b. host.notify → system notice bar ----------------------------------------
+	const noticeP = waitFor(sock, (m) => m.type === "notice" && m.text?.includes("plugin notify test"), "notice");
+	sock.send(JSON.stringify({ type: "plugin_message", pluginId: "demo-mailbox", payload: { action: "notify", text: "plugin notify test OK" } }));
 	await noticeP;
 	console.log("✓ host.notify delivers a system notice");
 
-	// -- 2c. host.sendTo 定向投递（双 socket） --------------------------------
+	// -- 2c. host.sendTo targeted delivery (two sockets) --------------------------------
 	const sock2 = await connect("plug-b");
 	const toB = waitFor(sock2, (m) => m.type === "plugin_data" && m.payload?.direct === "b", "direct-to-b");
 	let leaked = false;
@@ -191,7 +191,7 @@ try {
 	if (leaked) fail("sendTo message leaked to the other socket");
 	else console.log("✓ host.sendTo targets only the addressed socket");
 
-	// -- 2e. 设置面板插件开关：set_settings 回显 + 持久化 ---------------------
+	// -- 2e. settings-panel plugin toggle: set_settings echo + persist ---------------------
 	const disP = waitFor(sock, (m) => m.type === "settings_state" && m.settings?.disabledPlugins?.includes("demo-mailbox"), "settings_state(disabled)");
 	sock.send(JSON.stringify({ type: "set_settings", disabledPlugins: ["demo-mailbox"] }));
 	await disP;
@@ -200,7 +200,7 @@ try {
 	await enP;
 	console.log("✓ set_settings echoes disabledPlugins toggle");
 
-	// -- 2d. plugins_reload：epoch 递增 + 清单重推 ----------------------------
+	// -- 2d. plugins_reload: epoch increments + catalog re-push ----------------------------
 	const beforeEpoch = pluginsMsg.epoch ?? 0;
 	const reP = waitFor(sock, (m) => m.type === "plugins" && (m.epoch ?? 0) > beforeEpoch, "plugins(reload)");
 	sock.send(JSON.stringify({ type: "plugins_reload" }));
@@ -210,13 +210,13 @@ try {
 
 	sock2.close();
 
-	// -- 3. 未知/未激活插件的静默丢弃 --------------------------------------
+	// -- 3. silent drop for unknown/inactive plugins --------------------------------------
 	sock.send(JSON.stringify({ type: "plugin_message", pluginId: "no-such", payload: { x: 1 } }));
 	sock.send(JSON.stringify({ type: "plugin_message", pluginId: "../evil", payload: { x: 1 } }));
-	await new Promise((r) => setTimeout(r, 500)); // 若崩溃，下面的请求会失败
+	await new Promise((r) => setTimeout(r, 500)); // if it crashed, the next request would fail
 	console.log("✓ unknown/illegal pluginId silently ignored");
 
-	// -- 4. 客户端静态服务 --------------------------------------------------
+	// -- 4. client static serving --------------------------------------------------
 	const jsRes = await fetch(`${BASE}/plugins/demo-mailbox/client/entry.mjs`);
 	const ct = jsRes.headers.get("content-type") ?? "";
 	if (!jsRes.ok || !ct.includes("text/javascript")) {
@@ -226,8 +226,8 @@ try {
 	} else {
 		console.log("✓ /plugins/:id/client/* serves JS with correct Content-Type");
 	}
-	// 服务端代码与 manifest 不在 client/ 白名单里 —— 路由不匹配时落到 SPA
-	// catch-all 返回 index.html（200 但是 HTML），绝不能返回文件本体。
+	// Server code and manifest are not in the client/ whitelist — unmatched routes fall through to the SPA
+	// catch-all returns index.html (200 but HTML); must never return the file body.
 	for (const bad of [
 		`${BASE}/plugins/demo-mailbox/index.mjs`,
 		`${BASE}/plugins/demo-mailbox/manifest.json`,
@@ -239,7 +239,7 @@ try {
 		}
 	}
 	{
-		// 路径穿越：id 段非法，同样只能落 SPA 兑底
+		// path traversal: illegal id segment, also falls through to SPA fallback
 		const r = await fetch(
 			`${BASE}/plugins/%2e%2e%2f%2e%2e%2fclient-state.json/client/entry.mjs`,
 		);
@@ -257,7 +257,7 @@ try {
 	ws?.close();
 	proc?.kill("SIGTERM");
 	if (process.exitCode) {
-		// 给非零退出前留出清理时间，但不要悬挂
+		// leave time to clean up before a non-zero exit, but don't hang
 		setTimeout(() => {
 			rmSync(dataDir, { recursive: true, force: true });
 			process.exit(process.exitCode);

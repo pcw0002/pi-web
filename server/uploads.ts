@@ -1,11 +1,12 @@
 /**
- * uploads — 文件对话上传的存储与清理。
+ * uploads — storage and cleanup for files uploaded into a conversation.
  *
- * 上传文件落在 <dataDir>/uploads/<clientId>/<ts>-<name>（模型以绝对路径
- * reference 读取）。此前这里硬编码 ~/.pi-web，不吃 PI_WEB_DATA_DIR —— 已改为
- * 与 index.ts 相同的解析逻辑。清理策略：默认保留 14 天，启动时扫一次 +
- * 每 6 小时扫一次；PI_WEB_UPLOAD_RETENTION_DAYS 覆盖保留天数，0 = 关闭清理。
- * 全程 best-effort：清理失败绝不影响服务。
+ * Uploads land at <dataDir>/uploads/<clientId>/<ts>-<name> (the model reads
+ * them as an absolute-path reference). This used to hard-code ~/.pi-web and
+ * ignore PI_WEB_DATA_DIR — now it uses the same resolution as index.ts.
+ * Retention: 14 days by default, scanned once at startup and every 6 hours;
+ * PI_WEB_UPLOAD_RETENTION_DAYS overrides, 0 = disable cleanup. Always
+ * best-effort: a cleanup failure must never affect the service.
  */
 import { readdir, rm, stat } from "node:fs/promises";
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";

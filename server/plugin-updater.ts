@@ -1,11 +1,13 @@
 /**
- * 插件更新辅助（备份/回滚 + 远端 sha 对比）——纯逻辑，供 CLI（bin/pi-web-ui.mjs）
- * 与单测共用。零网络依赖：远端 sha 经注入的 exec 获取（生产 = git ls-remote；
- * 测试 = fake exec 或本地 git 仓库路径，git ls-remote 支持本地仓库，完全离线）。
+ * Plugin update helpers (backup / rollback + remote sha compare) — pure
+ * logic shared by the CLI (bin/pi-web-ui.mjs) and unit tests. Zero network
+ * dependency: the remote sha is obtained via an injected exec (production =
+ * git ls-remote; tests = fake exec or a local git repo path — git ls-remote
+ * works against a local repo, fully offline).
  *
- * 布局：
- *   <dataDir>/plugins/<id>/           安装本体（含 .pi-source.json + .pi-git-sha）
- *   <dataDir>/plugin-backups/<id>-<ts>/  覆盖安装前的旧版本快照（保留最近 N 份）
+ * Layout:
+ *   <dataDir>/plugins/<id>/             installed copy (includes .pi-source.json + .pi-git-sha)
+ *   <dataDir>/plugin-backups/<id>-<ts>/ snapshot of the previous version taken before overwrite (keep last N)
  */
 
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, cpSync, writeFileSync } from "node:fs";
@@ -13,7 +15,7 @@ import { join } from "node:path";
 import { execFile } from "node:child_process";
 
 const PLUGIN_ID_RE = /^[A-Za-z0-9_-]+$/;
-/** 保留的备份份数（超出删除最旧的）。 */
+/** Number of backups to keep (older ones are deleted). */
 export const BACKUP_KEEP = 3;
 
 export type Exec = (
@@ -21,7 +23,7 @@ export type Exec = (
 	args: string[],
 ) => Promise<{ ok: boolean; stdout: string; stderr: string }>;
 
-/** 默认执行器：execFile 直跑 git（不经 shell），15s 超时。 */
+/** Default executor: run git via execFile (no shell), 15s timeout. */
 export const execGit: Exec = (cmd, args) =>
 	new Promise((resolve) => {
 		execFile(cmd, args, { timeout: 15_000, encoding: "utf8" }, (err, stdout, stderr) => {
@@ -31,8 +33,9 @@ export const execGit: Exec = (cmd, args) =>
 	});
 
 /**
- * 覆盖安装前备份旧插件目录 → <dataDir>/plugin-backups/<id>-<ts>/。
- * 目标不存在/备份失败返回 null（调用方可继续——备份是尽力而为的保护）。
+ * Back up the old plugin directory before overwrite → <dataDir>/plugin-backups/<id>-<ts>/.
+ * Returns null if the target is missing or the backup fails (the caller may continue —
+ * backup is a best-effort safety net).
  */
 export function ensureBackup(dataDir: string, id: string, opts?: { source?: string }): string | null {
 	if (!PLUGIN_ID_RE.test(id)) return null;
@@ -43,7 +46,7 @@ export function ensureBackup(dataDir: string, id: string, opts?: { source?: stri
 	try {
 		mkdirSync(dirnameOf(dest)!, { recursive: true });		cpSync(target, dest, {
 			recursive: true,
-			// 与安装一致：不备份 .git/node_modules（纯运行目录），config.json 等保留。
+			// Same as install: skip .git/node_modules (runtime-only tree); keep config.json etc.
 			filter: (s) => !/(^|[\\/])(\.git|node_modules)([\\/]|$)/.test(s),
 		});
 		writeFileSync(
@@ -56,14 +59,14 @@ export function ensureBackup(dataDir: string, id: string, opts?: { source?: stri
 		try {
 			rmSync(dest, { recursive: true, force: true });
 		} catch {
-			/* 清理失败忽略 */
+			/* ignore cleanup failure */
 		}
-		console.warn(`[plugin-updater] 备份 ${id} 失败：`, err instanceof Error ? err.message : err);
+		console.warn(`[plugin-updater] backup of ${id} failed:`, err instanceof Error ? err.message : err);
 		return null;
 	}
 }
 
-/** 该插件的备份目录列表（按时间从新到旧）。 */
+/** Backup directories for this plugin, newest first. */
 export function listBackups(dataDir: string, id: string): string[] {
 	if (!PLUGIN_ID_RE.test(id)) return [];
 	const dir = join(dataDir, "plugin-backups");
@@ -81,8 +84,8 @@ export function listBackups(dataDir: string, id: string): string[] {
 }
 
 /**
- * 回滚到最近一份备份：删当前 plugins/<id> → 拷贝备份回 → 删备份。
- * 返回最近备份 ts；无备份返回 null。
+ * Roll back to the newest backup: delete current plugins/<id> → copy the backup back → delete the backup.
+ * Returns the backup ts; null if there is no backup.
  */
 export function restoreBackup(dataDir: string, id: string): string | null {
 	const backups = listBackups(dataDir, id);
@@ -96,53 +99,53 @@ export function restoreBackup(dataDir: string, id: string): string | null {
 		rmSync(src, { recursive: true, force: true });
 		return backups[0];
 	} catch (err) {
-		console.warn(`[plugin-updater] 回滚 ${id} 失败：`, err instanceof Error ? err.message : err);
+		console.warn(`[plugin-updater] rollback of ${id} failed:`, err instanceof Error ? err.message : err);
 		return null;
 	}
 }
 
-/** 保留最近 BACKUP_KEEP 份，删除更旧的。 */
+/** Keep the newest BACKUP_KEEP copies; delete older ones. */
 export function pruneBackups(dataDir: string, id: string, keep = BACKUP_KEEP): void {
 	const backups = listBackups(dataDir, id);
 	for (const b of backups.slice(keep)) {
 		try {
 			rmSync(join(dataDir, "plugin-backups", b), { recursive: true, force: true });
 		} catch {
-			/* 忽略 */
+			/* ignore */
 		}
 	}
 }
 
 /**
- * 解析一个安装源并取远端 HEAD sha（前 12 位）。
- *  - 本地 git 仓库路径 / file:// → git ls-remote <path> HEAD（离线）
- *  - GitHub owner/repo、URL → git ls-remote https://github.com/o/r.git HEAD
- *  - 无法识别 / git 不在 / 网络失败 → null（调用方标记「无法检查」）
+ * Parse an install source and fetch the remote HEAD sha (first 12 chars).
+ *  - local git repo path / file:// → git ls-remote <path> HEAD (offline)
+ *  - GitHub owner/repo or URL → git ls-remote https://github.com/o/r.git HEAD
+ *  - unrecognized / git missing / network failure → null (caller marks "cannot check")
  */
 export async function resolveRemoteSha(spec: string, exec: Exec = execGit): Promise<string | null> {
 	const clean = String(spec ?? "").trim();
 	if (!clean) return null;
 	let remote: string | null = null;
 	if (existsSync(clean)) {
-		remote = clean; // 本地 git 仓库路径
+		remote = clean; // local git repo path
 	} else if (/^file:\/\//i.test(clean)) {
 		remote = clean.slice("file://".length);
 	} else {
-		// GitHub 形态（owner/repo、URL、git@）
+		// GitHub shape (owner/repo, URL, git@)
 		let s = clean.replace(/^git@([^:]+):/, "");
 		const m = s.match(/^https?:\/\/(?:www\.)?github\.com\/(.+?)(?:\.git)?\/?$/i);
 		if (m) [, s] = m;
-		s = s.split("#")[0]; // 去掉 #分支
+		s = s.split("#")[0]; // strip #branch
 		const segs = s.split("/").filter(Boolean);
 		if (segs.length < 2) return null;
-		// 只取 owner/repo（/tree/<ref>/<subpath> 等后缀不影响远端 sha）
+		// Keep only owner/repo (/tree/<ref>/<subpath> suffixes do not affect the remote sha)
 		const repo = segs[0] + "/" + segs[1].replace(/\.git$/, "");
 		remote = `https://github.com/${repo}.git`;
 	}
 	if (!remote) return null;
 	const res = await exec("git", ["ls-remote", remote, "HEAD"]);
 	if (!res.ok) return null;
-	// 行格式: <sha>\tHEAD（可能多行——取第一行）
+	// Line format: <sha>\tHEAD (may be multiple lines — take the first)
 	const sha = (res.stdout.match(/^([0-9a-f]{40,64})\s+HEAD/m)?.[1]) ?? null;
 	return sha ? sha.slice(0, 12) : null;
 }
@@ -152,16 +155,16 @@ export interface PluginUpdateInfo {
 	name?: string;
 	version?: string;
 	source: string;
-	/** 本地安装时记录的 sha（.pi-git-sha）。 */
+	/** Sha recorded at install time (.pi-git-sha). */
 	localSha: string | null;
-	/** 远端 HEAD sha（null = 无法检查：非 git 源 / git 不可用 / 网络失败）。 */
+	/** Remote HEAD sha (null = cannot check: not a git source / git unavailable / network failure). */
 	remoteSha: string | null;
-	/** localSha 与 remoteSha 都存在且不同。 */
+	/** Both localSha and remoteSha are present and differ. */
 	updatable: boolean;
 	error?: string;
 }
 
-/** 扫描全部已装插件，对比本地 sha 与远端 sha，报告更新状态。 */
+/** Scan every installed plugin, compare local sha vs remote sha, report update status. */
 export async function checkPluginUpdates(
 	dataDir: string,
 	exec: Exec = execGit,
@@ -180,12 +183,12 @@ export async function checkPluginUpdates(
 		try {
 			const sourceJson = readFileSync(join(dir, ".pi-source.json"), "utf8");
 			const { source } = JSON.parse(sourceJson) as { source?: string };
-			if (!source) continue; // 无来源记录（手工拷入）→ skip
+			if (!source) continue; // no source record (copied in by hand) → skip
 			let localSha: string | null = null;
 			try {
 				localSha = readFileSync(join(dir, ".pi-git-sha"), "utf8").trim() || null;
 			} catch {
-				localSha = null; // 无 sha 记录 → 保守认为可更新（不知道装了哪个版本）
+				localSha = null; // no sha record → conservatively treat as updatable (unknown installed version)
 			}
 			let remoteSha: string | null = null;
 			let error: string | undefined;
@@ -195,7 +198,7 @@ export async function checkPluginUpdates(
 				error = err instanceof Error ? err.message : String(err);
 				remoteSha = null;
 			}
-			if (!remoteSha && !error) error = "无法检查（非 git 源或 git 不可用）";
+			if (!remoteSha && !error) error = "Cannot check (not a git source or git unavailable)";
 			let name: string | undefined;
 			let version: string | undefined;
 			try {
@@ -206,7 +209,7 @@ export async function checkPluginUpdates(
 				name = m.name;
 				version = m.version;
 			} catch {
-				/* 坏 manifest：仍报告 */
+				/* bad manifest: still report */
 			}
 			const updatable = !!remoteSha && (!localSha || localSha !== remoteSha);
 			out.push({
@@ -220,7 +223,7 @@ export async function checkPluginUpdates(
 				error,
 			});
 		} catch {
-			continue; // 坏目录跳过
+			continue; // skip a bad directory
 		}
 	}
 	return out;

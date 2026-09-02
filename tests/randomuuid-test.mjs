@@ -24,7 +24,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
-// fileURLToPath: URL.pathname 在 Windows 下是 /E:/... 形式，直接当 cwd 会失败
+// fileURLToPath: URL.pathname on Windows is /E:/...; using it as cwd directly fails
 const REPO_ROOT = fileURLToPath(new globalThis.URL("../", import.meta.url));
 
 const HEADLESS = CHROME_PATH;
@@ -132,7 +132,7 @@ check(
 );
 
 // ---- 1. connection must attach: hello sent, server snapshot arrives ----
-// "已连接" alone is NOT sufficient (status flips to "open" before the throw);
+// "Connected" alone is NOT sufficient (status flips to "open" before the throw);
 // a server snapshot (footer cwd) proves the hello round-trip completed.
 const attached = await page
 	.waitForFunction(
@@ -150,7 +150,7 @@ check("session attaches without crypto.randomUUID (hello + snapshot)", attached)
 let tab = false;
 let termRan = false;
 try {
-	await page.click('.view-switch button:has-text("终端")');
+	await page.click('.view-switch button:has-text("Terminal")');
 	await page.waitForSelector(".terminal-view", { timeout: 5000 });
 	await page.click(".term-commands .panel-new");
 	await page.fill("#cmd-name", "uuid-regression");

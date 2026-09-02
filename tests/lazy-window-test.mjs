@@ -48,8 +48,8 @@ process.env.PI_WEB_CWD = workdir;
 process.env.PI_WEB_DATA_DIR = dataDir;
 process.env.PI_CODING_AGENT_DIR = agentDir;
 const CLIENT_ID = "lazy-window-test-client";
-// 每条约 12000 字 → 渲染高度几千 px，足以撑出缓冲带
-const TALL_TEXT = "很长的需求描述。".repeat(2000);
+// ~12000 chars each → thousands of px of render height, enough to overflow the buffer band
+const TALL_TEXT = "A very long requirement description. ".repeat(2000);
 
 const server = spawn(
 	process.execPath,
@@ -98,7 +98,7 @@ function seedChat(want) {
 		const ws = new WebSocket(`ws://localhost:${PORT}/ws`);
 		const timer = setTimeout(() => reject(new Error("seed timeout")), 30000);
 		let step = 0;
-		// 协议 v2：后续快照可能是增量，本地累计消息数
+		// protocol v2: later snapshots may be deltas; accumulate message count locally
 		let known = 0;
 		const sendNext = () => {
 			if (step === 0) {
@@ -108,13 +108,13 @@ function seedChat(want) {
 				ws.send(
 					JSON.stringify({
 						type: "prompt",
-						text: "请总结这些文件",
+						text: "Please summarize these files",
 						attachments,
 					}),
 				);
 			} else {
 				ws.send(
-					JSON.stringify({ type: "prompt", text: `${TALL_TEXT}\n\n第 ${step} 条` }),
+					JSON.stringify({ type: "prompt", text: `${TALL_TEXT}\n\nitem ${step}` }),
 				);
 			}
 			step++;
@@ -137,7 +137,7 @@ function seedChat(want) {
 				total = known;
 			}
 			if (total < 0) return;
-			// 等到本步的消息都落盘再发下一条（避免并发 prompt 打断）
+			// wait until this step's messages have landed before sending the next (avoid concurrent prompt interrupt)
 			if (step === 1 && total >= 36) return sendNext();
 			if (step === 2 && total >= 38) return sendNext();
 			if (total >= want) {
@@ -172,20 +172,20 @@ async function main() {
 	await page.goto(`http://localhost:${PORT}/`);
 	await page.waitForSelector(".topbar", { timeout: 60000 });
 	await page.waitForSelector(".msg", { timeout: 30000 });
-	await sleep(500); // 等 attach 后首帧 sweep 完成
+	await sleep(500); // wait for the first-frame sweep after attach
 
 	const phCount = () => page.locator(".msg-lazy-ph").count();
 	const initialPh = await phCount();
 	check("viewport-distant messages collapsed to placeholders", initialPh > 0);
 
-	// 占位保留 data-msg-id（导航 / 跳转查询不受影响）
+	// placeholders keep data-msg-id (nav / jump queries are unaffected)
 	const phId = await page
 		.locator(".msg-lazy-ph")
 		.first()
 		.getAttribute("data-msg-id");
 	check("placeholder keeps data-msg-id", !!phId);
 
-	// 底部常驻区不被占位：最后一条消息一定是真实渲染
+	// the bottom always-rendered zone is not placeholder'd: the last message is always real
 	const lastReal = await page.evaluate(() => {
 		const all = document.querySelectorAll(".messages [data-msg-id]");
 		const last = all[all.length - 1];
@@ -193,7 +193,7 @@ async function main() {
 	});
 	check("bottom region stays fully rendered", lastReal);
 
-	// 记录一个占位 id，向上滚动后应恢复为真实内容
+	// remember a placeholder id; scrolling up should restore real content
 	await page.evaluate(() => {
 		const el = document.querySelector(".messages");
 		el.scrollTop = 0;
@@ -210,14 +210,14 @@ async function main() {
 		afterScrollPh > 0,
 	);
 
-	// 搜索打开期间强制全渲染（兼容 Range 收集 / DOM 高亮）
+	// force full render while search is open (compatible with Range collection / DOM highlight)
 	await page.keyboard.press("Control+f");
 	await page.waitForSelector(".search-bar", { timeout: 5000 });
 	await sleep(400);
 	check("opening search force-renders all messages", (await phCount()) === 0);
 	await page.keyboard.press("Escape");
 
-	// 问题导航跳转：目标消息被 pin 成真实渲染并 flash
+	// question-nav jump: the target message is pinned to a real render and flashed
 	const qnCount = await page.locator(".qn-bar").count();
 	check("question nav rail rendered", qnCount > 0);
 	const qnText = ((await page.locator(".qn-bar").first().textContent()) ?? "")
@@ -229,7 +229,7 @@ async function main() {
 			...document.querySelectorAll(".messages [data-msg-id]"),
 		].find(
 			(n) =>
-				// 第一个问题是最早的 user 消息
+				// the first question is the earliest user message
 				n.getAttribute("data-role") === "user" &&
 				n.textContent.includes(text),
 		);
@@ -241,7 +241,7 @@ async function main() {
 	}, qnText);
 	check("jump pins target and flashes it", jumpedOk);
 
-	// 贴底按钮仍工作
+	// stick-to-bottom button still works
 	await page.evaluate(() => {
 		const el = document.querySelector(".messages");
 		el.scrollTop = 0;

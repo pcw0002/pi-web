@@ -2,9 +2,9 @@ import { defineConfig } from "vitest/config";
 
 export default defineConfig({
 	test: {
-		// 纯函数单测：毫秒级、零 token、零端口 —— CI 必跑。
-		// 端到端脚本（tests/*-test.mjs）不在这里：它们自起 server，用
-		// `npm run test:smoke` / 单独 node 运行。
+		// Pure-function unit tests: millisecond, zero token, zero port — required in CI.
+		// End-to-end scripts (tests/*-test.mjs) are not here: they boot their own
+		// server via `npm run test:smoke` / a standalone node run.
 		include: ["tests/unit/**/*.test.ts"],
 		environment: "node",
 	},

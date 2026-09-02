@@ -1,15 +1,15 @@
 /**
- * ws-session-test.mjs — 纯 WebSocket 层冒烟测试（不走浏览器）。
+ * ws-session-test.mjs — pure WebSocket-layer smoke (no browser).
  *
- * 验证 ws 协议的关键握手和行为：
- *   hello → ready → list_files(根)→ files → 媒体 /api/file → 结束
+ * Verifies key ws protocol handshake and behavior:
+ *   hello → ready → list_files(root) → files → media /api/file → done
  *
- * 用法（需先有 server 在跑，或用环境变量指定）:
- *   node ws-session-test.mjs                        # 连 ws://localhost:${PORT:-8787}
- *   PORT=9000 node ws-session-test.mjs              # 自定义端口
- *   WS_ROOT=/abs/media.d  node ws-session-test.mjs  # 自定义媒体目录（默认 .pi-web/../media）
+ * Usage (needs a server already running, or set via env):
+ *   node ws-session-test.mjs                        # connect ws://localhost:${PORT:-8787}
+ *   PORT=9000 node ws-session-test.mjs              # custom port
+ *   WS_ROOT=/abs/media.d  node ws-session-test.mjs  # custom media dir (default .pi-web/../media)
  *
- * 与仓库其它 test.mjs 一致：clientId 随机生成，端口可配，不依赖特定项目文件。
+ * Same as other test.mjs in the repo: random clientId, configurable port, no specific project files.
  */
 import { randomUUID } from "node:crypto";
 import WebSocket from "ws";
@@ -18,8 +18,8 @@ const PORT = Number(process.env.PORT ?? 8787);
 const BASE = `http://localhost:${PORT}`;
 const WS_URL = `ws://localhost:${PORT}/ws`;
 
-// 媒体文件只要落到该客户端可访问的 cwd 下任意图片即可；默认用会话目录下
-// 一张可能的图片，找不到也不致命（仅打印 fetch 状态）。
+// Any image under a cwd the client can access is enough; by default use one under the session dir
+// if missing, that is not fatal (just print the fetch status).
 const MEDIA_PATH = process.env.WS_MEDIA_PATH;
 
 const clientId = randomUUID();
@@ -40,7 +40,7 @@ ws.on("message", async (d) => {
 
 	if (m.type === "ready") {
 		log("ready, serverVersion:", m.serverVersion);
-		// 用根列表暴露当前会话 cwd（path undefined → 根）
+		// use the root listing to expose the current session cwd (path undefined → root)
 		ws.send(JSON.stringify({ type: "list_files", path: undefined }));
 	} else if (m.type === "files") {
 		log("files root:", m.path, "entries:", m.entries.length);
@@ -50,7 +50,7 @@ ws.on("message", async (d) => {
 			);
 			log("media fetch:", r.status, r.headers.get("content-type"));
 		} else {
-			log("WS_MEDIA_PATH 未设置，跳过媒体下载探测");
+			log("WS_MEDIA_PATH not set, skipping media download probe");
 		}
 		ws.close();
 		process.exit(0);

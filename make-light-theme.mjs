@@ -2,7 +2,7 @@
 /**
  * Regenerates the built-in LIGHT themes from web/src/styles.css (the bundled
  * dark theme):
- *   themes/light.css    — soft violet-accented light theme (显示名「白色」)
+ *   themes/light.css    — soft violet-accented light theme
  *   themes/md-preview.css — dark theme mirroring the in-app markdown FILE
  *                          preview surface: deep black base + violet radial
  *                          glow from the top-left (.fp-markdown look-alike)
@@ -92,7 +92,7 @@ const LIGHT = {
 	accentSoft: "rgba(124, 58, 237, 0.12)", termSelection: "rgba(124, 58, 237, 0.3)",
 };
 
-// 「白色」palette — pure white page, GitHub-blue accents (vs. violet in LIGHT).
+// "White" palette — pure white page, GitHub-blue accents (vs. violet in LIGHT).
 const WHITE = {
 	bg: "#ffffff", elev: "#ffffff", elev2: "#f6f8fa", border: "#d0d7de",
 	borderSoft: "#d8dee4", text: "#1f2328", textDim: "#59636e",
@@ -287,19 +287,19 @@ const BLUE_LINKS = [
 	["color: #6d28d9;", "color: #0550ae;"],
 ];
 
-// 「白色」— pure white page + GitHub-blue accents: clearly cooler than the
+// "White" — pure white page + GitHub-blue accents: clearly cooler than the
 // violet-tinted light theme (links/buttons/selection all turn blue).
-writeTheme("白色", "white.css", buildTheme(WHITE, BLUE_LINKS));
+writeTheme("White", "white.css", buildTheme(WHITE, BLUE_LINKS));
 
-// 「紫晕」— dark theme mirroring the in-app markdown FILE preview surface:
+// "Halo" — dark theme mirroring the in-app markdown FILE preview surface:
 // deep black base + violet radial glow from the top-left (.fp-markdown look).
 // Opaque chrome surfaces go translucent so the ambient gradient shows through
 // across the WHOLE window, not just the chat column.
 writeTheme(
-	"紫晕",
+	"Halo",
 	"md-preview.css",
 	buildTheme(null, [], `
-/* ---- ambient gradient（镜像 .fp-markdown 预览底色，覆盖整个窗口）---- */
+/* ---- ambient gradient (mirrors the .fp-markdown preview background, covers the whole window) ---- */
 :root {
 	--bg: #0a0b10;
 }
@@ -309,7 +309,7 @@ body {
 		radial-gradient(circle at 88% 100%, rgba(139, 92, 246, 0.07), transparent 44%),
 		#0a0b10;
 }
-/* 让渐变直接成为整个窗口的底色：铬件全部透明，只留边框定结构 */
+/* Let the gradient be the window background: chrome is fully transparent, only borders keep the structure */
 .topbar,
 .panel,
 .statusbar {

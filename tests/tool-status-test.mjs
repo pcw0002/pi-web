@@ -30,9 +30,9 @@ async function startServer() {
 		env: {
 			...process.env,
 			PORT: String(PORT),
-			// 隔离 cwd + client-state：绝不写进仓库根的真实会话存储；
-			// 历史快照里也不会再出现旧 toolResult 干扰排序断言。
-			// （agent 目录保留 —— 本测试需真模型执行 bash 工具）
+			// isolate cwd + client-state: never write into the real session store at the repo root;
+			// historical snapshots will not contain old toolResults that would mess up ordering assertions.
+			// (keep the agent dir — this test needs a real model to run the bash tool)
 			PI_WEB_CWD: mkdtempSync(join(tmpdir(), "piweb-toolstatus-")),
 			PI_WEB_DATA_DIR: mkdtempSync(join(tmpdir(), "piweb-toolstatus-data-")),
 		},
@@ -110,7 +110,7 @@ async function main() {
 	ws.send(
 		JSON.stringify({
 			type: "prompt",
-			text: "运行命令 pwd，把输出原样告诉我，不要做任何其他事。",
+			text: "Run pwd and tell me the output exactly; do nothing else.",
 		}),
 	);
 
@@ -132,7 +132,7 @@ async function main() {
 		120_000,
 	);
 	const statusIdx = msgs.indexOf(status);
-	// 只在 tool_status 之后找快照 —— 历史快照若含旧 toolResult 不应参与比较
+	// only look at snapshots after tool_status — historical snapshots with old toolResults must not be compared
 	const snapIdx = msgs.findIndex(
 		(m, i) =>
 			i > statusIdx &&

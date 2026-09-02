@@ -1,7 +1,7 @@
 /**
  * Direct goal set — auto-start test.
- * Sends set_goal (NO AI-提炼 / no wizard) and confirms the main agent is
- * auto-triggered to generate (a "【目标已设定】" user message appears in a
+ * Sends set_goal (NO AI-refine / no wizard) and confirms the main agent is
+ * auto-triggered to generate (a "[Goal set]" user message appears in a
  * snapshot). No reliance on the model completing.
  *
  * Robust harness: server-startup check + WebSocket open/error/close handled,
@@ -16,7 +16,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
-// fileURLToPath: URL.pathname 在 Windows 下是 /E:/... 形式，直接当 cwd 会失败
+// fileURLToPath: URL.pathname on Windows is /E:/...; using it as cwd directly fails
 const REPO_ROOT = fileURLToPath(new globalThis.URL("../", import.meta.url));
 
 /* eslint-env node */
@@ -90,13 +90,13 @@ function mkWaiters() {
 	try { await next((m) => m.type === "snapshot", "snapshot", 20000); } catch {}
 
 	// Direct goal set (maxRounds 0 = unlimited, locked).
-	ws.send(JSON.stringify({ type: "set_goal", goal: "帮我写一句自我介绍。", maxRounds: 0, locked: true }));
+	ws.send(JSON.stringify({ type: "set_goal", goal: "Write a one-sentence self-introduction.", maxRounds: 0, locked: true }));
 
 	// Expect the auto-start kick-off user message in a snapshot.
 	let kickoff = false;
 	try {
 		await next(
-			(m) => m.type === "snapshot" && m.state.messages.some((mm) => (mm.content?.[0]?.text ?? "").startsWith("【目标已设定】")),
+			(m) => m.type === "snapshot" && m.state.messages.some((mm) => (mm.content?.[0]?.text ?? "").startsWith("[Goal set]")),
 			"auto-start kick-off",
 			20000,
 		);

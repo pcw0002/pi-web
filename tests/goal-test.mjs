@@ -15,7 +15,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
-// fileURLToPath: URL.pathname 在 Windows 下是 /E:/... 形式，直接当 cwd 会失败
+// fileURLToPath: URL.pathname on Windows is /E:/...; using it as cwd directly fails
 const REPO_ROOT = fileURLToPath(new globalThis.URL("../", import.meta.url));
 
 /* eslint-env node */
@@ -117,18 +117,18 @@ async function run() {
 	// 1) Set a locked goal with a reviewer model and maxRounds.
 	c.send({
 		type: "set_goal",
-		goal: "把首页标题改为 Goal Buddy",
+		goal: "Change the homepage title to Goal Buddy",
 		reviewModel: "openai/gpt-4o-mini",
 		maxRounds: 2,
 		locked: true,
 	});
 	const g1 = await c.next(
-		(m) => m.type === "goal_status" && m.status.goal === "把首页标题改为 Goal Buddy",
+		(m) => m.type === "goal_status" && m.status.goal === "Change the homepage title to Goal Buddy",
 		"goal_status after set",
 	);
 	check(
 		"set_goal sets status",
-		g1.status.goal === "把首页标题改为 Goal Buddy",
+		g1.status.goal === "Change the homepage title to Goal Buddy",
 		JSON.stringify(g1.status),
 	);
 	check(
@@ -149,9 +149,9 @@ async function run() {
 	check("clear_goal clears the goal", g2.status.goal === null, JSON.stringify(g2.status));
 
 	// 3) Single-shot (locked=false).
-	c.send({ type: "set_goal", goal: "只审查这一轮", maxRounds: 3, locked: false });
+	c.send({ type: "set_goal", goal: "Review this round only", maxRounds: 3, locked: false });
 	const g3 = await c.next(
-		(m) => m.type === "goal_status" && m.status.goal === "只审查这一轮",
+		(m) => m.type === "goal_status" && m.status.goal === "Review this round only",
 		"goal_status single-shot",
 	);
 	check(

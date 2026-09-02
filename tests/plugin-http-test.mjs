@@ -1,11 +1,11 @@
 /**
- * 插件 HTTP 路由协议测试（零 token、自包含）。
+ * Plugin HTTP-route protocol test (zero token, self-contained).
  *
- * host.route("GET"/"POST", path, handler) 实际暴露为 /plugins-api/<id><path>：
- * 覆盖 GET/POST 命中、未知插件 404、未注册路径 404、handler 抛错 500、
- * 注销后路由消失。
+ * host.route("GET"/"POST", path, handler) is exposed as /plugins-api/<id><path>:
+ * covers GET/POST hits, unknown plugin 404, unregistered path 404, throwing handler 500,
+ * route gone after unregister.
  *
- * 运行：先 npm run build:server，再 node tests/plugin-http-test.mjs
+ * Run: npm run build:server, then node tests/plugin-http-test.mjs
  */
 import { spawn } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync, realpathSync } from "node:fs";
@@ -34,8 +34,8 @@ writeFileSync(
 			res.json({ got: req.body ?? null });
 		});
 		const off = host.route("GET", "/gone", (_req, res) => res.send("bye"));
-		off(); // 注册即注销 → 应 404
-		host.route("GET", "/boom", () => { throw new Error("炸了"); });
+		off(); // register then immediately unregister → should 404
+		host.route("GET", "/boom", () => { throw new Error("boom"); });
 	},
 };`,
 );
@@ -82,13 +82,13 @@ try {
 		void ping();
 	});
 
-	// WS attach 触发插件激活（路由随之挂载）
+	// WS attach triggers plugin activation (routes mount with it)
 	const sock = await connectWs();
 	await new Promise((r) => setTimeout(r, 800));
 
-	// -- GET 命中 + query ------------------------------------------------------
+	// -- GET hit + query ------------------------------------------------------
 	let r = await fetch(`${BASE}/plugins-api/api/ping?echo=hi`);
-	if (r.status !== 200 || (await r.json()).pong !== true) fail(`GET /ping 异常：${r.status}`);
+	if (r.status !== 200 || (await r.json()).pong !== true) fail(`GET /ping unexpected: ${r.status}`);
 	else console.log('✓ GET /plugins-api/api/ping → {"pong":true}');
 
 	// -- POST + express.json body ---------------------------------------------
@@ -97,22 +97,22 @@ try {
 		headers: { "content-type": "application/json" },
 		body: JSON.stringify({ x: 42 }),
 	});
-	if (r.status !== 200 || (await r.json()).got?.x !== 42) fail(`POST /submit 异常：${r.status}`);
-	else console.log("✓ POST body 解析并透传 handler");
+	if (r.status !== 200 || (await r.json()).got?.x !== 42) fail(`POST /submit unexpected: ${r.status}`);
+	else console.log("✓ POST body parsed and forwarded to handler");
 
-	// -- 未注册路径 404 / 注销后的路由 404 --------------------------------------
+	// -- unregistered path 404 / unregistered-after-off route 404 --------------------------------------
 	r = await fetch(`${BASE}/plugins-api/api/nope`);
-	if (r.status !== 404) fail(`未注册路径应 404，实际 ${r.status}`);
+	if (r.status !== 404) fail(`unregistered path should 404, got ${r.status}`);
 	r = await fetch(`${BASE}/plugins-api/api/gone`);
-	if (r.status !== 404) fail(`注销后的路由应 404，实际 ${r.status}`);
-	console.log("✓ 未注册/已注销路由 → 404");
+	if (r.status !== 404) fail(`route after unregister should 404, got ${r.status}`);
+	console.log("✓ unregistered/unmounted route → 404");
 
-	// -- 未知插件 404 / handler 抛错 500 ----------------------------------------
+	// -- unknown plugin 404 / throwing handler 500 ----------------------------------------
 	r = await fetch(`${BASE}/plugins-api/nosuch/ping`);
-	if (r.status !== 404) fail(`未知插件应 404，实际 ${r.status}`);
+	if (r.status !== 404) fail(`unknown plugin should 404, got ${r.status}`);
 	r = await fetch(`${BASE}/plugins-api/api/boom`);
-	if (r.status !== 500) fail(`handler 抛错应 500，实际 ${r.status}`);
-	console.log("✓ 未知插件 → 404；handler 抛错 → 500");
+	if (r.status !== 500) fail(`throwing handler should 500, got ${r.status}`);
+	console.log("✓ unknown plugin → 404; throwing handler → 500");
 
 	sock.close();
 } catch (err) {

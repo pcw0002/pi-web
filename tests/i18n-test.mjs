@@ -1,5 +1,5 @@
-/* i18n smoke test: boots the compiled server, opens the built UI, verifies the
- * language switcher defaults to Chinese and switches to English.
+/* UI copy smoke test: boots the compiled server, opens the built UI, verifies
+ * English chrome (New chat / Chat / model dropdown).
  * Run:  npm run build && node i18n-test.mjs */
 import { CHROME_PATH } from "./lib/chrome.mjs";
 import { spawn } from "node:child_process";
@@ -77,35 +77,16 @@ async function main() {
 	await page.waitForSelector(".topbar", { timeout: 5000 });
 	console.log("app booted");
 
-	// -- default language is Chinese -----------------------------------------
 	await page.waitForSelector(".brand", { timeout: 5000 });
-	const zhNewChat = await page.locator(".topbar .newchat span").textContent();
-	check(`default UI is Chinese ("新对话")`, zhNewChat?.includes("新对话"));
-	const zhLangChip = await page
-		.locator(".topbar-actions .chip-sub")
-		.last()
-		.textContent();
-	check(`language chip shows 中文`, zhLangChip?.includes("中文"));
-
-	// -- switch to English ----------------------------------------------------
-	await page
-		.locator(".topbar-actions .dropdown")
-		.last()
-		.locator("button.chip")
-		.click();
-	await page.waitForSelector(".dd-item:has-text('English')", { timeout: 3000 });
-	await page.locator(".dd-item:has-text('English')").click();
-	await sleep(400);
-
 	const enNewChat = await page.locator(".topbar .newchat span").textContent();
-	check(`UI switched to English ("New chat")`, enNewChat?.includes("New chat"));
+	check(`UI shows "New chat"`, enNewChat?.includes("New chat"));
+
 	const enTab = await page
 		.locator(".view-switch button span")
 		.first()
 		.textContent();
 	check(`view tab shows "Chat"`, enTab?.includes("Chat"));
 
-	// model dropdown header translated
 	await page
 		.locator(".topbar-actions .dropdown")
 		.first()
@@ -119,26 +100,13 @@ async function main() {
 	);
 	await page.keyboard.press("Escape");
 
-	// -- persistence: reload keeps English ------------------------------------
 	await page.reload();
 	await page.waitForSelector(".topbar", { timeout: 15000 });
 	await sleep(500);
 	const enAfterReload = await page
 		.locator(".topbar .newchat span")
 		.textContent();
-	check(`English persists across reload`, enAfterReload?.includes("New chat"));
-
-	// -- switch back to Chinese -----------------------------------------------
-	await page
-		.locator(".topbar-actions .dropdown")
-		.last()
-		.locator("button.chip")
-		.click();
-	await page.waitForSelector(".dd-item:has-text('中文')", { timeout: 3000 });
-	await page.locator(".dd-item:has-text('中文')").first().click();
-	await sleep(400);
-	const zhAgain = await page.locator(".topbar .newchat span").textContent();
-	check(`switched back to Chinese`, zhAgain?.includes("新对话"));
+	check(`English chrome persists across reload`, enAfterReload?.includes("New chat"));
 
 	const errs = consoleErrors.filter(
 		(e) => !e.includes("favicon") && !e.includes("ResizeObserver"),
