@@ -37,7 +37,7 @@ export default {
 			run(args) {
 				globalThis.__cmds.push(args);
 				host.broadcast({ kind: "cmd", args });
-				return args ? `Got: ${args}` : "Got (empty args)";
+				return args ? "Got: " + args : "Got (empty args)";
 			},
 		});
 		return () => {};

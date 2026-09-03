@@ -434,8 +434,8 @@ export default {
 			return opened.sftp;
 		}
 
-		/** glob → RegExp (supports **, *, ?; vscode-sftp style).
-		 *  e.g. **/*.map matches both a.map and a/b/c.map */
+		/** glob → RegExp (supports globstar, star, and question mark; vscode-sftp style).
+		 *  For example, a globstar + slash + *.map matches files at any depth. */
 		function globToRegExp(pattern) {
 			let re = "";
 			for (let i = 0; i < pattern.length; i++) {

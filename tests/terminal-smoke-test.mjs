@@ -256,7 +256,9 @@ async function main() {
 		rows: 24,
 	});
 	await sleep(600);
-	check("shell produced output", (outputs.get(t1) ?? "").length > 0);
+	// Some shells do not print an initial prompt until the first input (notably
+	// non-interactive CI environments), so verify output using an explicit echo
+	// below rather than requiring unsolicited startup bytes.
 	check("terminal_list identifies the active conversation", snapshotReply?.conversationId && snapshotReply.conversationId.length > 0);
 	send({ type: "terminal_input", terminalId: t1, data: "echo WS_ECHO_OK\r" });
 	await sleep(800);
