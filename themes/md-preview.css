@@ -504,9 +504,34 @@ body.panel-resizing {
 	border-bottom: 2px solid var(--border);
 }
 
-/* Recent-projects title stays put (not sticky): only the project list scrolls, so the scrollbar never sits beside the title */
+/* Projects title/actions stay put: only the project list scrolls. */
+.panel-section-heading {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 6px;
+	padding-right: 4px;
+}
 .panel-projects .panel-section-title {
 	flex-shrink: 0;
+}
+
+.project-open-btn {
+	display: inline-flex;
+	align-items: center;
+	gap: 5px;
+	border: 1px solid var(--border-soft);
+	border-radius: 6px;
+	background: var(--bg-elev);
+	color: var(--text-dim);
+	padding: 4px 7px;
+	font-size: 11px;
+	cursor: pointer;
+}
+.project-open-btn:hover {
+	border-color: var(--accent);
+	color: var(--text);
+	background: var(--accent-soft);
 }
 
 .projects-scroll {
@@ -5496,6 +5521,77 @@ span.msg-editor-hint svg {
 
 .model-modal {
 	max-width: 640px;
+}
+
+/* ---- project picker ---- */
+.project-picker-modal {
+	max-width: 620px;
+	overflow: hidden;
+}
+
+.project-picker-path {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+}
+.project-picker-path input {
+	flex: 1;
+	min-width: 0;
+	background: var(--bg-elev);
+	border: 1px solid var(--border);
+	border-radius: 8px;
+	color: var(--text);
+	font-family: var(--mono);
+	font-size: 12px;
+	padding: 8px 10px;
+	outline: none;
+}
+.project-picker-path input:focus {
+	border-color: var(--accent);
+}
+.project-picker-path .icon-only {
+	padding: 8px 10px;
+}
+
+.project-picker-list {
+	display: flex;
+	flex-direction: column;
+	gap: 2px;
+	min-height: 180px;
+	max-height: min(42vh, 360px);
+	overflow-y: auto;
+	padding: 5px;
+	background: var(--bg-elev);
+	border: 1px solid var(--border-soft);
+	border-radius: 9px;
+}
+.project-picker-item {
+	display: flex;
+	align-items: center;
+	gap: 9px;
+	width: 100%;
+	border: 0;
+	border-radius: 7px;
+	background: transparent;
+	color: var(--text-dim);
+	padding: 8px 9px;
+	text-align: left;
+	cursor: pointer;
+}
+.project-picker-item svg {
+	flex-shrink: 0;
+	color: var(--accent);
+}
+.project-picker-item:hover {
+	background: var(--bg-elev2);
+	color: var(--text);
+}
+.project-picker-empty {
+	display: grid;
+	flex: 1;
+	place-items: center;
+	color: var(--text-faint);
+	font-size: 12px;
 }
 
 /* ---- settings modal ---- */

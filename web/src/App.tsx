@@ -37,6 +37,7 @@ import { ModelConfigModal } from "./components/ModelConfigModal";
 import { SettingsModal } from "./components/SettingsModal";
 import { BgTasksModal } from "./components/BgTasksModal";
 import { GlobalSearchModal } from "./components/GlobalSearchModal";
+import { ProjectPickerModal } from "./components/ProjectPickerModal";
 import { FilePreview, type PreviewFile } from "./components/FilePreview";
 import { useChat } from "./use-chat";
 import type {
@@ -247,6 +248,8 @@ export function App() {
 	const [bgTasksOpen, setBgTasksOpen] = useState(false);
 	// Global search panel (sessions / projects / workspace files).
 	const [globalSearchOpen, setGlobalSearchOpen] = useState(false);
+	// Server-backed project directory browser.
+	const [projectPickerOpen, setProjectPickerOpen] = useState(false);
 
 	// Plugin-view bridge: plugins have no chat context, so they request a
 	// visible-terminal command via a window event (same pattern as the SCM
@@ -665,6 +668,10 @@ export function App() {
 							sessions={chat.sessions}
 							projects={chat.projects}
 							activeConversationId={chat.activeConversationId}
+							onOpenProject={() => {
+								setDrawer(null);
+								setProjectPickerOpen(true);
+							}}
 						/>
 					</div>
 					{!isMobile && (
@@ -841,6 +848,14 @@ export function App() {
 					servers={chat.bgServers}
 					send={send}
 					onClose={() => setBgTasksOpen(false)}
+				/>
+			)}
+			{projectPickerOpen && chat.state && (
+				<ProjectPickerModal
+					cwd={chat.state.cwd}
+					completions={chat.pathCompletions}
+					send={send}
+					onClose={() => setProjectPickerOpen(false)}
 				/>
 			)}
 			{globalSearchOpen && (

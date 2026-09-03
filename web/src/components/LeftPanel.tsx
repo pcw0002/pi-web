@@ -1,5 +1,5 @@
 import { memo, useEffect, useState } from "react";
-import { FiCheck, FiFolder, FiMessageSquare, FiTrash2 } from "react-icons/fi";
+import { FiCheck, FiFolder, FiFolderPlus, FiMessageSquare, FiTrash2 } from "react-icons/fi";
 import type { ConversationSummary, ProjectSummary, SessionSummary } from "../types";
 import type { ConnStatus } from "../use-chat";
 import { useT } from "../i18n";
@@ -18,6 +18,7 @@ interface LeftPanelProps {
 	sessions: SessionSummary[];
 	projects: ProjectSummary[];
 	activeConversationId: string;
+	onOpenProject: () => void;
 	send: (
 		msg:
 			| { type: "new_chat" }
@@ -45,7 +46,7 @@ function formatModified(ts: number): string {
 	return `${d.getMonth() + 1}/${d.getDate()}`;
 }
 
-export const LeftPanel = memo(function LeftPanel({ ready, status, cwd, sessionFile, conversations, sessions, projects, activeConversationId, send, active }: LeftPanelProps) {
+export const LeftPanel = memo(function LeftPanel({ ready, status, cwd, sessionFile, conversations, sessions, projects, activeConversationId, onOpenProject, send, active }: LeftPanelProps) {
 	const t = useT();
 	const currentFile = sessionFile;
 	const currentCwd = cwd;
@@ -102,49 +103,58 @@ export const LeftPanel = memo(function LeftPanel({ ready, status, cwd, sessionFi
 
 	return (
 		<aside className="panel panel-left">
-			{projects.length > 0 && (
-				<div className="panel-projects">
-					<div className="panel-section-title">{t("recentProjects")}</div>
-					<div className="projects-scroll">
-						{projects.map((p) => {
-							const active = currentCwd === p.path;
-							return (
-								<div
-									className="lp-row"
-									key={p.path}
-									onMouseLeave={() =>
-										setConfirmDel((k) => (k === `proj:${p.path}` ? null : k))
-									}
-								>
-									<button
-										type="button"
-										className={`project-item ${active ? "active" : ""}`}
-										title={p.path}
-										onClick={() => {
-											if (!active) send({ type: "set_cwd", path: p.path });
-										}}
-									>
-										<FiFolder className="project-icon" />
-										<span className="project-info">
-											<span className="project-name">{projectName(p.path)}</span>
-											<span className="project-path">{p.path}</span>
-										</span>
-										<span className="project-time">
-											{formatModified(p.lastUsed)}
-										</span>
-									</button>
-									{delButton(
-										`proj:${p.path}`,
-										t("deleteProject"),
-										t("deleteProjectConfirm"),
-										() => send({ type: "remove_project", path: p.path }),
-									)}
-								</div>
-							);
-						})}
-					</div>
+			<div className="panel-projects">
+				<div className="panel-section-heading">
+					<div className="panel-section-title">{t("projects")}</div>
+					<button
+						type="button"
+						className="project-open-btn"
+						title={t("openProject")}
+						onClick={onOpenProject}
+					>
+						<FiFolderPlus />
+						<span>{t("open")}</span>
+					</button>
 				</div>
-			)}
+				<div className="projects-scroll">
+					{projects.map((p) => {
+						const active = currentCwd === p.path;
+						return (
+							<div
+								className="lp-row"
+								key={p.path}
+								onMouseLeave={() =>
+									setConfirmDel((k) => (k === `proj:${p.path}` ? null : k))
+								}
+							>
+								<button
+									type="button"
+									className={`project-item ${active ? "active" : ""}`}
+									title={p.path}
+									onClick={() => {
+										if (!active) send({ type: "set_cwd", path: p.path });
+									}}
+								>
+									<FiFolder className="project-icon" />
+									<span className="project-info">
+										<span className="project-name">{projectName(p.path)}</span>
+										<span className="project-path">{p.path}</span>
+									</span>
+									<span className="project-time">
+										{formatModified(p.lastUsed)}
+									</span>
+								</button>
+								{delButton(
+									`proj:${p.path}`,
+									t("deleteProject"),
+									t("deleteProjectConfirm"),
+									() => send({ type: "remove_project", path: p.path }),
+								)}
+							</div>
+						);
+					})}
+				</div>
+			</div>
 			{conversations.length > 0 && (
 				<div className="panel-convs">
 					<div className="panel-section-title">{t("runningConversations")}</div>

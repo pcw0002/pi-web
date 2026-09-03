@@ -114,8 +114,16 @@ const copy = {
 	slashCopyFailed: "Copy failed — please copy manually",
 	slashCopyEmpty: "No assistant reply to copy yet",
 
-	/* left panel */
+	/* left panel / project picker */
+	projects: "Projects",
 	recentProjects: "Recent projects",
+	open: "Open",
+	openProject: "Open project",
+	openProjectDesc: "Choose a directory on this machine. Each project keeps its own chats, files, terminals, source control, and reviews.",
+	projectPath: "Project directory path",
+	parentDirectory: "Parent directory",
+	browse: "Browse",
+	noSubdirectories: "No subdirectories found here.",
 	runningConversations: "Running chats",
 	historySessions: "History",
 	openHistory: "History",
